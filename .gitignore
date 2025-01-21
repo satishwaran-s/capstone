@@ -1,0 +1,9 @@
+build/
+install/
+devel/
+*.log
+*.pyc
+__pycache__/
+src/YDLidar-SDK
+src/examples
+src/ydlidar_ros2_ws/src/ydlidar_ros2_driver
