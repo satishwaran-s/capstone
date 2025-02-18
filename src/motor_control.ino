@@ -1,65 +1,131 @@
-// Motor Pins
-const int motorIn1 = 43;  // IN1 on L298N
-const int motorIn2 = 45;  // IN2 on L298N
+// Motor A Pins
+const int motorAIn1 = 43;  
+const int motorAIn2 = 45;  
+const int motorAPWM = 9;  
+
+// Motor B Pins
+const int motorBIn3 = 47;  
+const int motorBIn4 = 49;  
+const int motorBPWM = 10;  
 
 // Encoder Pins
-const int encoderPinA = 53;  // Yellow wire (Encoder A Phase)
-const int encoderPinB = 51;  // Green wire (Encoder B Phase)
+const int encoderA_A = 18;  // Motor A Encoder A Phase
+const int encoderA_B = 19;  // Motor A Encoder B Phase
+const int encoderB_A = 20;   // Motor B Encoder A Phase 
+const int encoderB_B = 21;   // Motor B Encoder B Phase
 
 // Variables for encoder tracking
-volatile int encoderCount = 0;  // Tracks the encoder pulses
-int motorSpeed = 150;           // Motor speed (0-255 for PWM)
+volatile int encoderCountA = 0;  
+volatile int encoderCountB = 0;  
+int motorSpeed = 150;  // Motor speed (0-255 for PWM)
 
-// Interrupt Service Routines for encoder
-void encoderISR_A() {
-  if (digitalRead(encoderPinA) == digitalRead(encoderPinB)) {
-    encoderCount++;
+// Interrupt Service Routines for encoders
+void encoderISR_A_A() {
+  if (digitalRead(encoderA_A) == digitalRead(encoderA_B)) {
+    encoderCountA++;
   } else {
-    encoderCount--;
+    encoderCountA--;
   }
 }
 
-void encoderISR_B() {
-  if (digitalRead(encoderPinA) == digitalRead(encoderPinB)) {
-    encoderCount--;
+void encoderISR_A_B() {
+  if (digitalRead(encoderA_A) == digitalRead(encoderA_B)) {
+    encoderCountA--;
   } else {
-    encoderCount++;
+    encoderCountA++;
+  }
+}
+
+void encoderISR_B_A() {
+  if (digitalRead(encoderB_A) == digitalRead(encoderB_B)) {
+    encoderCountB++;
+  } else {
+    encoderCountB--;
+  }
+}
+
+void encoderISR_B_B() {
+  if (digitalRead(encoderB_A) == digitalRead(encoderB_B)) {
+    encoderCountB--;
+  } else {
+    encoderCountB++;
   }
 }
 
 void setup() {
-  // Motor pins setup
-  pinMode(motorIn1, OUTPUT);
-  pinMode(motorIn2, OUTPUT);
+  // Motor A setup
+  pinMode(motorAIn1, OUTPUT);
+  pinMode(motorAIn2, OUTPUT);
+  pinMode(motorAPWM, OUTPUT);
 
-  // Encoder pins setup
-  pinMode(encoderPinA, INPUT_PULLUP);
-  pinMode(encoderPinB, INPUT_PULLUP);
+  // Motor B setup
+  pinMode(motorBIn3, OUTPUT);
+  pinMode(motorBIn4, OUTPUT);
+  pinMode(motorBPWM, OUTPUT);
 
-  // Attach interrupts for encoder pins
-  attachInterrupt(digitalPinToInterrupt(encoderPinA), encoderISR_A, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(encoderPinB), encoderISR_B, CHANGE);
+  // Encoder setup
+  pinMode(encoderA_A, INPUT_PULLUP);
+  pinMode(encoderA_B, INPUT_PULLUP);
+  pinMode(encoderB_A, INPUT_PULLUP);
+  pinMode(encoderB_B, INPUT_PULLUP);
 
-  Serial.begin(9600);  // For monitoring the encoder count
+  // Attach interrupts for encoders
+  attachInterrupt(digitalPinToInterrupt(encoderA_A), encoderISR_A_A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoderA_B), encoderISR_A_B, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoderB_A), encoderISR_B_A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(encoderB_B), encoderISR_B_B, CHANGE);
+
+  Serial.begin(115200);  // For monitoring the encoder count
 }
 
 void loop() {
-  // Example: Forward direction
-  digitalWrite(motorIn1, HIGH);
-  digitalWrite(motorIn2, LOW);
+  // Set motor speed
+  analogWrite(motorAPWM, motorSpeed);
+  analogWrite(motorBPWM, motorSpeed);
 
-  // Print encoder count to Serial Monitor
-  Serial.print("Encoder Count: ");
-  Serial.println(encoderCount);
+  // Move reverse (for testing or as needed)
+  digitalWrite(motorAIn1, HIGH);   // Reverse for Motor A
+  digitalWrite(motorAIn2, LOW);
+  digitalWrite(motorBIn3, HIGH);   // Reverse for Motor B
+  digitalWrite(motorBIn4, LOW);
 
-  // Delay to avoid flooding the Serial Monitor
-  delay(500);
+  // Print encoder counts (for reverse motion)
+  Serial.print("Motor A Encoder Count: ");
+  Serial.print(encoderCountA);
+  Serial.print(" | Motor B Encoder Count: ");
+  Serial.println(encoderCountB);
 
-  // Example: Stop motor after some rotations
-  if (encoderCount >= 1000) {
-    digitalWrite(motorIn1, LOW);
-    digitalWrite(motorIn2, LOW);
-    Serial.println("Target reached, stopping motor.");
-    while (true); // Stop further execution
+  // Delay for reverse motion
+  delay(5000);
+
+  // Move forward
+  digitalWrite(motorAIn1, LOW);    // Forward for Motor A
+  digitalWrite(motorAIn2, HIGH);
+  digitalWrite(motorBIn3, LOW);    // Forward for Motor B
+  digitalWrite(motorBIn4, HIGH);
+
+  // Print encoder counts (for forward motion)
+  Serial.print("Motor A Encoder Count: ");
+  Serial.print(encoderCountA);
+  Serial.print(" | Motor B Encoder Count: ");
+  Serial.println(encoderCountB);
+
+  // Delay for forward motion
+  delay(5000);
+
+  // Stop after reaching target
+  if (encoderCountA >= 1000 || encoderCountB >= 1000) {
+    digitalWrite(motorAIn1, LOW);
+    digitalWrite(motorAIn2, LOW);
+    digitalWrite(motorBIn3, LOW);
+    digitalWrite(motorBIn4, LOW);
+    analogWrite(motorAPWM, 0);
+    analogWrite(motorBPWM, 0);
+    Serial.println("Target reached, stopping motors.");
+    while (true);  // Stop further execution
   }
+
+// TO STOP MOTORS RUN THIS COMMAND!!!!
+//analogWrite(motorAPWM, 0);    // Stop Motor A
+//  analogWrite(motorBPWM, 0);    // Stop Motor B
 }
