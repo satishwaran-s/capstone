@@ -1,8 +1,0 @@
-teleop_twist_joy:
-  ros__parameters:
-    axis_linear: 1     # Joystick Up/Down (axes[1] for linear forward/backward movement)
-    axis_angular: 0    # Joystick Left/Right (axes[0] for angular turning)
-    scale_linear: 1.0  # Speed of forward/backward movement
-    scale_angular: 1.0 # Speed of turning
-    button_forward: 0  # X button (button[0]) to move forward
-    button_backward: 1 # Circle button (button[1]) to move backward (change if needed)
