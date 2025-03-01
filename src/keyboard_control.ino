@@ -1,12 +1,13 @@
+
 // Motor A Pins
-const int motorAIn1 = 43;
-const int motorAIn2 = 45;
-const int motorAPWM = 9;
+const int motorAIn1 = 47;
+const int motorAIn2 = 49;
+const int motorAPWM = 10;
 
 // Motor B Pins
-const int motorBIn3 = 47;
-const int motorBIn4 = 49;
-const int motorBPWM = 10;
+const int motorBIn3 = 43;
+const int motorBIn4 = 45;
+const int motorBPWM = 9;
 
 // Encoder Pins
 const int encoderA_A = 18;
@@ -26,6 +27,8 @@ volatile int encoderCountB = 0;
 int motorSpeed = 150;
 const int speedStep = 25;
 bool pumpActive = false;
+bool isTurning = false;
+
 
 // Timer Variables for Speed Calculation
 unsigned long prevMillis = 0;
@@ -53,19 +56,21 @@ void setup() {
     pinMode(pumpIn2, OUTPUT);
     pinMode(pumpPWM, OUTPUT);
     pinMode(liquid_sensor, INPUT);
+
+
     
     Serial.begin(115200);
 }
 
 void loop() {
-    if (millis() - prevMillis >= interval) {
+    if (millis() - prevMillis >= interval && !isTurning) {
         prevMillis = millis();
         calculateSpeed();
         adjustMotorSpeed();
     }
     
-    if (Serial.available() > 0) {
-        char command = Serial.read();
+    if (Serial.available() > 0) {        
+      char command = Serial.read();
         switch (command) {
             case 'F': moveForward(); break;
             case 'B': moveBackward(); break;
@@ -76,6 +81,10 @@ void loop() {
             case '-': decreaseSpeed(); break;
             case 'P': startPump(); break;
             case 'O': stopPump(); break;
+            default:
+              Serial.print("unknown command");
+              Serial.println(command);
+              break;
         }
     }
     
@@ -125,8 +134,10 @@ void moveBackward() {
     Serial.println("Moving Backward");
 }
 
-void turnLeft() {
-    analogWrite(motorAPWM, motorSpeed / 2);
+
+void turnRight() {
+    isTurning = true;
+    analogWrite(motorAPWM, motorSpeed);
     analogWrite(motorBPWM, motorSpeed);
     digitalWrite(motorAIn1, LOW);
     digitalWrite(motorAIn2, HIGH);
@@ -135,9 +146,10 @@ void turnLeft() {
     Serial.println("Turning Left");
 }
 
-void turnRight() {
+void turnLeft() {
+    isTurning = true;
     analogWrite(motorAPWM, motorSpeed);
-    analogWrite(motorBPWM, motorSpeed / 2);
+    analogWrite(motorBPWM, motorSpeed);
     digitalWrite(motorAIn1, HIGH);
     digitalWrite(motorAIn2, LOW);
     digitalWrite(motorBIn3, LOW);
