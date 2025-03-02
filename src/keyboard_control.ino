@@ -1,3 +1,4 @@
+
 // Motor A Pins
 const int motorAIn1 = 47;
 const int motorAIn2 = 49;
@@ -14,10 +15,34 @@ const int pumpIn2 = 4;
 const int pumpPWM = 3;
 const int liquid_sensor = 2;
 
-// Speed Variables
-int motorSpeed = 150;
-const int speedStep = 25;
+// Encoder Pins (Phase A and Phase B for both motors)
+const int encoderALeftPin = 18;  // Motor A Yellow (Phase A)
+const int encoderBLeftPin = 19;  // Motor A Green (Phase B)
+const int encoderARightPin = 20; // Motor B Yellow (Phase A)
+const int encoderBRightPin = 21; // Motor B Green (Phase B)
+
 bool pumpActive = false;
+
+// Variables for encoder counts
+volatile int leftEncoderCount = 0;
+volatile int rightEncoderCount = 0;
+
+// Encoder interrupt handlers
+void encoderALeftISR() {
+    if (digitalRead(encoderBLeftPin) == HIGH) {
+        leftEncoderCount++;
+    } else {
+        leftEncoderCount--;
+    }
+}
+
+void encoderARightISR() {
+    if (digitalRead(encoderBRightPin) == HIGH) {
+        rightEncoderCount++;
+    } else {
+        rightEncoderCount--;
+    }
+}
 
 void setup() {
     pinMode(motorAIn1, OUTPUT);
@@ -26,18 +51,35 @@ void setup() {
     pinMode(motorBIn3, OUTPUT);
     pinMode(motorBIn4, OUTPUT);
     pinMode(motorBPWM, OUTPUT);
-    
+
     pinMode(pumpIn1, OUTPUT);
     pinMode(pumpIn2, OUTPUT);
     pinMode(pumpPWM, OUTPUT);
     pinMode(liquid_sensor, INPUT);
-    
+
+    // Set encoder pins as inputs
+    pinMode(encoderALeftPin, INPUT);
+    pinMode(encoderBLeftPin, INPUT);
+    pinMode(encoderARightPin, INPUT);
+    pinMode(encoderBRightPin, INPUT);
+
+    // Attach interrupts for both encoders
+    attachInterrupt(digitalPinToInterrupt(encoderALeftPin), encoderALeftISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(encoderARightPin), encoderARightISR, CHANGE);
+
     Serial.begin(115200);
     Serial.println("Robot Control Ready");
 }
 
 void loop() {
-    if (Serial.available() > 0) {        
+    // Print encoder counts
+    Serial.print("Left Encoder Count: ");
+    Serial.println(leftEncoderCount);
+    Serial.print("Right Encoder Count: ");
+    Serial.println(rightEncoderCount);
+
+    // Process commands from Serial
+    if (Serial.available() > 0) {
       char command = Serial.read();
         switch (command) {
             case 'F': moveForward(); break;
@@ -53,27 +95,13 @@ void loop() {
               break;
         }
     }
-    
-    // Check liquid sensor only when pump is active
-    if (pumpActive) {
-        int liquid_level = digitalRead(liquid_sensor);
-        if (liquid_level == LOW) {  // Liquid detected
-            Serial.println("Liquid detected! Pumping...");
-            digitalWrite(pumpIn1, HIGH);  // Ensure correct direction
-            digitalWrite(pumpIn2, LOW);   // Ensure correct direction
-            analogWrite(pumpPWM, 255);    // Full PWM speed (adjust if needed)
-        } else {
-            Serial.println("No liquid detected. Stopping pump.");
-            stopPump();  // Stop pump if no liquid is detected
-        }
-    }
 
-    delay(100); 
+    delay(100);  // Add delay for readability
 }
 
 void moveForward() {
     analogWrite(motorAPWM, 222);
-    analogWrite(motorBPWM, 190);
+    analogWrite(motorBPWM, 240);
     digitalWrite(motorAIn1, LOW);
     digitalWrite(motorAIn2, HIGH);
     digitalWrite(motorBIn3, LOW);
