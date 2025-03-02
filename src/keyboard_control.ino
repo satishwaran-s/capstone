@@ -109,8 +109,8 @@ void turnLeft() {
 }
 
 void stopMotors() {
-    analogWrite(motorAPWM, 200);
-    analogWrite(motorBPWM, 200);
+    analogWrite(motorAPWM, 0);
+    analogWrite(motorBPWM, 0);
     digitalWrite(motorAIn1, LOW);
     digitalWrite(motorAIn2, LOW);
     digitalWrite(motorBIn3, LOW);
