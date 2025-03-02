@@ -54,18 +54,21 @@ void loop() {
         }
     }
     
+    // Check liquid sensor only when pump is active
     if (pumpActive) {
         int liquid_level = digitalRead(liquid_sensor);
-        if (liquid_level == LOW) {
+        if (liquid_level == LOW) {  // Liquid detected
             Serial.println("Liquid detected! Pumping...");
-            digitalWrite(pumpIn1, HIGH);
-            digitalWrite(pumpIn2, LOW);
-            analogWrite(pumpPWM, 255);
+            digitalWrite(pumpIn1, HIGH);  // Ensure correct direction
+            digitalWrite(pumpIn2, LOW);   // Ensure correct direction
+            analogWrite(pumpPWM, 255);    // Full PWM speed (adjust if needed)
         } else {
             Serial.println("No liquid detected. Stopping pump.");
-            stopPump();
+            stopPump();  // Stop pump if no liquid is detected
         }
     }
+
+    delay(100); 
 }
 
 void moveForward() {
@@ -120,16 +123,16 @@ void stopMotors() {
 
 void startPump() {
     pumpActive = true;
-    digitalWrite(pumpIn1, HIGH);
-    digitalWrite(pumpIn2, LOW);
-    analogWrite(pumpPWM, 255);
+    digitalWrite(pumpIn1, HIGH);  // Ensure this is correct for your pump's direction
+    digitalWrite(pumpIn2, LOW);   // Ensure this is correct for your pump's direction
+    analogWrite(pumpPWM, 255);    // Try lowering this value if the pump is not spraying well
     Serial.println("Pump Activated");
 }
 
 void stopPump() {
     pumpActive = false;
-    digitalWrite(pumpIn1, LOW);
-    digitalWrite(pumpIn2, LOW);
-    analogWrite(pumpPWM, 0);
+    digitalWrite(pumpIn1, LOW);   // Ensure pump is stopped
+    digitalWrite(pumpIn2, LOW);   // Ensure pump is stopped
+    analogWrite(pumpPWM, 0);      // Stop PWM signal to pump
     Serial.println("Pump Stopped");
 }
