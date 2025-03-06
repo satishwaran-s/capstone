@@ -36,9 +36,9 @@ class RobotController(Node):
         self.dt = 0.1  # Time step (100ms)
         self.left_encoder_count = 0
         self.right_encoder_count = 0
-        self.wheel_radius = 0.025  
+        self.wheel_radius = 0.0325
         self.wheel_base = 0.3    
-        
+
         # Create a publisher for status messages
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -109,8 +109,6 @@ class RobotController(Node):
                 self.status_publisher.publish(msg)
             except serial.SerialException as e:
                 self.get_logger().error(f'Serial communication error: {e}')
-        # to check if working use debug statement below
-        # self.get_logger().info(f"Sent command to Arduino: {command}")
 
     def get_key(self):
         fd = sys.stdin.fileno()
@@ -168,8 +166,14 @@ class RobotController(Node):
 
         # Calculate displacement and orientation change based on encoder counts
         # Convert encoder counts to distance traveled (assuming each encoder tick corresponds to a known distance)
-        left_distance = self.left_encoder_count * 2 * math.pi * self.wheel_radius / 360  # Convert encoder count to distance
-        right_distance = self.right_encoder_count * 2 * math.pi * self.wheel_radius / 360
+        TICKS_PER_REV = 44 # quadrature so 11 x 4
+        WHEEL_CIRCUMFERENCE = 2 * math.pi * self.wheel_radius
+        
+        left_distance = (self.left_encoder_count / TICKS_PER_REV) * WHEEL_CIRCUMFERENCE
+        right_distance = (self.right_encoder_count / TICKS_PER_REV) * WHEEL_CIRCUMFERENCE
+        
+        # left_distance = self.left_encoder_count * 2 * math.pi * self.wheel_radius / 360  # Convert encoder count to distance
+        # right_distance = self.right_encoder_count * 2 * math.pi * self.wheel_radius / 360
 
         # Calculate the robot's change in position and orientation
         delta_d = (left_distance + right_distance) / 2  # Average of left and right wheel displacements
@@ -182,23 +186,7 @@ class RobotController(Node):
         self.y += delta_y
         self.theta += delta_theta
         
-        # Create transform message
-        transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
-        transform.header.frame_id = 'odom'
-        transform.child_frame_id = 'base_link'
-        transform.transform.translation.x = self.x
-        transform.transform.translation.y = self.y
-        transform.transform.translation.z = 0.0
-        transform.transform.rotation.x = 0.0
-        transform.transform.rotation.y = 0.0
-        transform.transform.rotation.z = math.sin(self.theta / 2.0)
-        transform.transform.rotation.w = math.cos(self.theta / 2.0)
-        
-        # Broadcast the transform
-        self.tf_broadcaster.sendTransform(transform)
-        
-        # Publish the odometry message
+        # Create odometry message
         odom_msg = Odometry()
         odom_msg.header.stamp = self.get_clock().now().to_msg()
         odom_msg.header.frame_id = 'odom'
@@ -216,6 +204,22 @@ class RobotController(Node):
         # Publish the odometry message
         self.odom_publisher.publish(odom_msg)
 
+        # Create transform message
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = 'odom'
+        transform.child_frame_id = 'base_link'
+        transform.transform.translation.x = self.x
+        transform.transform.translation.y = self.y
+        transform.transform.translation.z = 0.0
+        transform.transform.rotation.x = 0.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = math.sin(self.theta / 2.0)
+        transform.transform.rotation.w = math.cos(self.theta / 2.0)
+        
+        # Broadcast the transform
+        self.tf_broadcaster.sendTransform(transform)
+
     def shutdown(self):
         self.running = False
         if self.serial_connection and self.serial_connection.is_open:
@@ -223,20 +227,19 @@ class RobotController(Node):
             if self.pumpActive:
                 self.send_command('O')
             self.serial_connection.close()
-            self.get_logger().info('Serial connection closed')
-
+            self.get_logger().info('Serial connection closed.')
 
 def main(args=None):
     rclpy.init(args=args)
     robot_controller = RobotController()
+    
     try:
         rclpy.spin(robot_controller)
     except KeyboardInterrupt:
         pass
-    finally:
-        robot_controller.shutdown()
-        robot_controller.destroy_node()
-        rclpy.shutdown()
+    
+    robot_controller.shutdown()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
