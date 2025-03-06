@@ -24,7 +24,7 @@ const int encoderBRightPin = 21;
 volatile int leftEncoderCount = 0;
 volatile int rightEncoderCount = 0;
 
-// PID Control Variables
+// PID Control Variables (optional)
 float Kp = 0.8, Ki = 0.02, Kd = 0.5;
 float leftError, rightError, leftPrevError = 0, rightPrevError = 0;
 float leftIntegral = 0, rightIntegral = 0;
@@ -32,14 +32,11 @@ float leftDerivative, rightDerivative;
 int baseSpeed = 200;
 
 // Wheel and Encoder Parameters
-const float wheelRadius = 3.25; // in cm
+const float wheelRadius = 0.0325;
 const int ticksPerRevolution = 44;
 const float wheelCircumference = 2 * 3.14159 * wheelRadius;
 const float cmPerTick = wheelCircumference / ticksPerRevolution;
-
-bool pumpActive = false;
-bool movingToTicks = false;
-int targetTicks = 0;
+const float wheelBase = 0.3;
 
 // Encoder interrupt handlers
 void encoderALeftISR() {
@@ -67,21 +64,15 @@ void setup() {
     pinMode(encoderBLeftPin, INPUT);
     pinMode(encoderARightPin, INPUT);
     pinMode(encoderBRightPin, INPUT);
+    
     attachInterrupt(digitalPinToInterrupt(encoderALeftPin), encoderALeftISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(encoderARightPin), encoderARightISR, CHANGE);
+    
     Serial.begin(115200);
 }
 
 void loop() {
-    if (movingToTicks) {
-        int leftSpeed = applyPID(leftEncoderCount, targetTicks, leftPrevError, leftIntegral, leftDerivative);
-        int rightSpeed = applyPID(rightEncoderCount, targetTicks, rightPrevError, rightIntegral, rightDerivative);
-        moveWithSpeed(leftSpeed, rightSpeed);
-        if (abs(leftEncoderCount) >= targetTicks && abs(rightEncoderCount) >= targetTicks) {
-            stopMotors();
-            movingToTicks = false;
-        }
-    }
+    updateOdometry(leftEncoderCount, rightEncoderCount);
 
     if (Serial.available() > 0) {
         char command = Serial.read();
@@ -93,36 +84,39 @@ void loop() {
             case 'S': stopMotors(); break;
             case 'P': startPump(); break;
             case 'O': stopPump(); break;
-            case 'T': setTargetDistance(Serial.parseInt()); break;
         }
     }
-    delay(50);
+
+    delay(100);
 }
 
-void setTargetDistance(int cm) {
-    targetTicks = cm / cmPerTick;
-    movingToTicks = true;
-    resetEncoders();
+void updateOdometry(int leftTicks, int rightTicks) {
+    float leftDistance = leftTicks * cmPerTick;
+    float rightDistance = rightTicks * cmPerTick;
+    float deltaDistance = (leftDistance + rightDistance) / 2;
+    float deltaAngle = (rightDistance - leftDistance) / wheelBase;
+
+//    Serial.print("Odometry: ");
+//    Serial.print(deltaDistance);
+//    Serial.print(", ");
+//    Serial.println(deltaAngle);
+
+    Serial.print("Encoder_left: ");
+    Serial.print(rightEncoderCount);
+    Serial.print(" , Encoder_right: ");
+    Serial.println(leftEncoderCount);
 }
 
-int applyPID(int encoderCount, int target, float &prevError, float &integral, float &derivative) {
-    float error = target - encoderCount;
-    integral += error;
-    derivative = error - prevError;
-    prevError = error;
-    return constrain(baseSpeed + (Kp * error + Ki * integral + Kd * derivative), 0, 255);
-}
-
-void moveWithSpeed(int leftSpeed, int rightSpeed) {
-    analogWrite(motorAPWM, leftSpeed);
-    analogWrite(motorBPWM, rightSpeed);
+// Motor control functions
+void moveForward() {
+    analogWrite(motorAPWM, baseSpeed);
+    analogWrite(motorBPWM, baseSpeed);
     digitalWrite(motorAIn1, LOW);
     digitalWrite(motorAIn2, HIGH);
     digitalWrite(motorBIn3, LOW);
     digitalWrite(motorBIn4, HIGH);
 }
 
-void moveForward() { moveWithSpeed(baseSpeed, baseSpeed); }
 void moveBackward() {
     analogWrite(motorAPWM, baseSpeed);
     analogWrite(motorBPWM, baseSpeed);
@@ -131,6 +125,7 @@ void moveBackward() {
     digitalWrite(motorBIn3, HIGH);
     digitalWrite(motorBIn4, LOW);
 }
+
 void turnRight() {
     analogWrite(motorAPWM, baseSpeed);
     analogWrite(motorBPWM, baseSpeed);
@@ -139,6 +134,7 @@ void turnRight() {
     digitalWrite(motorBIn3, HIGH);
     digitalWrite(motorBIn4, LOW);
 }
+
 void turnLeft() {
     analogWrite(motorAPWM, baseSpeed);
     analogWrite(motorBPWM, baseSpeed);
@@ -147,6 +143,7 @@ void turnLeft() {
     digitalWrite(motorBIn3, LOW);
     digitalWrite(motorBIn4, HIGH);
 }
+
 void stopMotors() {
     analogWrite(motorAPWM, 0);
     analogWrite(motorBPWM, 0);
@@ -155,22 +152,15 @@ void stopMotors() {
     digitalWrite(motorBIn3, LOW);
     digitalWrite(motorBIn4, LOW);
 }
+
 void startPump() {
-    pumpActive = true;
     digitalWrite(pumpIn1, HIGH);
     digitalWrite(pumpIn2, LOW);
     analogWrite(pumpPWM, 255);
 }
+
 void stopPump() {
-    pumpActive = false;
     digitalWrite(pumpIn1, LOW);
     digitalWrite(pumpIn2, LOW);
     analogWrite(pumpPWM, 0);
 }
-void resetEncoders() {
-    leftEncoderCount = 0;
-    rightEncoderCount = 0;
-}
-
-
-
