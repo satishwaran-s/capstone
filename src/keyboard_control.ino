@@ -15,41 +15,25 @@ const int pumpPWM = 3;
 const int liquid_sensor = 2;
 
 // Encoder Pins
-const int encoderALeftPin = 18;
-const int encoderBLeftPin = 19;
-const int encoderARightPin = 20;
-const int encoderBRightPin = 21;
+const int encoderARightPin = 18;
+const int encoderBRightPin = 19;
+const int encoderALeftPin = 20;
+const int encoderBLeftPin = 21;
 
 // Encoder counts
 volatile int leftEncoderCount = 0;
 volatile int rightEncoderCount = 0;
 
-// PID Control Variables (optional)
-float Kp = 0.8, Ki = 0.02, Kd = 0.5;
-float leftError, rightError, leftPrevError = 0, rightPrevError = 0;
-float leftIntegral = 0, rightIntegral = 0;
-float leftDerivative, rightDerivative;
-int baseSpeed = 200;
+// Constants for Wheel and Encoder Parameters
+const float wheelDiameter = 0.065;  // meters
+const int ppr = 44;  // Pulses per revolution
+const float wheelCircumference = 3.14159 * wheelDiameter;  // meters
 
-// Wheel and Encoder Parameters
-const float wheelRadius = 0.0325;
-const int ticksPerRevolution = 44;
-const float wheelCircumference = 2 * 3.14159 * wheelRadius;
-const float cmPerTick = wheelCircumference / ticksPerRevolution;
-const float wheelBase = 0.3;
-
-// Encoder interrupt handlers
-void encoderALeftISR() {
-    if (digitalRead(encoderBLeftPin) == HIGH) leftEncoderCount++;
-    else leftEncoderCount--;
-}
-
-void encoderARightISR() {
-    if (digitalRead(encoderBRightPin) == HIGH) rightEncoderCount++;
-    else rightEncoderCount--;
-}
+// Motor and Encoder Control Variables
+int baseSpeed = 180;  // base speed for motors
 
 void setup() {
+    // Motor and Pump Pins Setup
     pinMode(motorAIn1, OUTPUT);
     pinMode(motorAIn2, OUTPUT);
     pinMode(motorAPWM, OUTPUT);
@@ -60,51 +44,56 @@ void setup() {
     pinMode(pumpIn2, OUTPUT);
     pinMode(pumpPWM, OUTPUT);
     pinMode(liquid_sensor, INPUT);
+
+    // Encoder Pins Setup
     pinMode(encoderALeftPin, INPUT);
     pinMode(encoderBLeftPin, INPUT);
     pinMode(encoderARightPin, INPUT);
     pinMode(encoderBRightPin, INPUT);
-    
-    attachInterrupt(digitalPinToInterrupt(encoderALeftPin), encoderALeftISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(encoderARightPin), encoderARightISR, CHANGE);
-    
+
+    // Attach interrupts for encoder readings
+    attachInterrupt(digitalPinToInterrupt(encoderALeftPin), leftEncoder, RISING);
+    attachInterrupt(digitalPinToInterrupt(encoderARightPin), rightEncoder, RISING);
+
+    // Start Serial Communication
     Serial.begin(115200);
 }
 
 void loop() {
-    updateOdometry(leftEncoderCount, rightEncoderCount);
-
+    // Check for incoming serial commands
     if (Serial.available() > 0) {
         char command = Serial.read();
         switch (command) {
-            case 'F': moveForward(); break;
-            case 'B': moveBackward(); break;
-            case 'L': turnLeft(); break;
-            case 'R': turnRight(); break;
-            case 'S': stopMotors(); break;
-            case 'P': startPump(); break;
-            case 'O': stopPump(); break;
+            case 'F': case 'f': moveForward(); break;
+            case 'B': case 'b': moveBackward(); break;
+            case 'L': case 'l': turnLeft(); break;
+            case 'R': case 'r': turnRight(); break;
+            case 'S': case 's': stopMotors(); break;
+            case 'P': case 'p': startPump(); break;
+            case 'O': case 'o': stopPump(); break;
         }
     }
 
-    delay(100);
-}
+    // Calculate and print the distance traveled by each wheel
+    float leftDistance = ((leftEncoderCount * 0.01989) / ppr) * wheelCircumference;
+    float rightDistance = ((rightEncoderCount * 0.019) / ppr) * wheelCircumference;
 
-void updateOdometry(int leftTicks, int rightTicks) {
-    float leftDistance = leftTicks * cmPerTick;
-    float rightDistance = rightTicks * cmPerTick;
-    float deltaDistance = (leftDistance + rightDistance) / 2;
-    float deltaAngle = (rightDistance - leftDistance) / wheelBase;
+//    Serial.print("L:");Serial.print(leftEncoderCount);
+//    Serial.print(",R:");
+//    Serial.println(rightEncoderCount);
 
-//    Serial.print("Odometry: ");
-//    Serial.print(deltaDistance);
-//    Serial.print(", ");
-//    Serial.println(deltaAngle);
+//    Serial.print("Left Encoder Count: ");
+//    Serial.print(leftEncoderCount);
+    Serial.print("L:");
+    Serial.print(leftDistance);
+//    Serial.print("\tRight Encoder Count: ");
+//    Serial.print(rightEncoderCount);
+    Serial.print(" R:");
+    Serial.println(rightDistance);
 
-    Serial.print("Encoder_left: ");
-    Serial.print(rightEncoderCount);
-    Serial.print(" , Encoder_right: ");
-    Serial.println(leftEncoderCount);
+
+
+    delay(100);  // Update every 100ms
 }
 
 // Motor control functions
@@ -153,14 +142,24 @@ void stopMotors() {
     digitalWrite(motorBIn4, LOW);
 }
 
+// Pump control functions
 void startPump() {
     digitalWrite(pumpIn1, HIGH);
     digitalWrite(pumpIn2, LOW);
-    analogWrite(pumpPWM, 255);
+    analogWrite(pumpPWM, 255);  // Full speed for the pump
 }
 
 void stopPump() {
     digitalWrite(pumpIn1, LOW);
     digitalWrite(pumpIn2, LOW);
-    analogWrite(pumpPWM, 0);
+    analogWrite(pumpPWM, 0);  // Stop the pump
+}
+
+// Encoder interrupt handlers
+void leftEncoder() {
+    leftEncoderCount++;
+}
+
+void rightEncoder() {
+    rightEncoderCount++;
 }
