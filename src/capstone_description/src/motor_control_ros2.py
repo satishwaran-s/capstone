@@ -9,108 +9,85 @@ import termios
 import tty
 import threading
 import math
+import re
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
 
-class RobotController(Node):
+
+class SerialMotorController(Node):
     def __init__(self):
-        super().__init__('robot_controller')
-        
-        # Serial port setup
-        self.serial_port = '/dev/ttyUSB0'  # Change this to match your Arduino port
-        self.baud_rate = 115200
-        self.serial_connection = None
-        
-        # Robot state
-        self.current_command = 'S'  # Start with motors stopped
-        self.pumpActive = False
+        super().__init__("serial_motor_controller")
+
+        # Parameters for testing (constant velocities)
+        self.declare_parameter(
+            "use_constant_velocity", False
+        )  # Changed to False to use encoder data
+        self.declare_parameter("constant_vx", 0.2)
+        self.declare_parameter("constant_vy", 0.0)
+        self.declare_parameter("constant_vth", 0.1)
+
+        # Get parameters
+        self.use_constant_velocity = (
+            self.get_parameter("use_constant_velocity").get_parameter_value().bool_value
+        )
+        self.constant_vx = (
+            self.get_parameter("constant_vx").get_parameter_value().double_value
+        )
+        self.constant_vy = (
+            self.get_parameter("constant_vy").get_parameter_value().double_value
+        )
+        self.constant_vth = (
+            self.get_parameter("constant_vth").get_parameter_value().double_value
+        )
+
+        # Initialize serial connection to Arduino
+        self.serial_port = serial.Serial(
+            "/dev/ttyUSB1", 115200, timeout=1
+        )  # Change to your Arduino port
+        self.get_logger().info("Connected to Arduino via Serial")
         self.running = True
-        self.linear_velocity = 0.0
-        self.angular_velocity = 0.0
+
+        # create a timer for odometry updates which reads every 0.1 seconds which is 100ms cos we need to publish 10hz
+        self.odom_timer = self.create_timer(0.1, self.read_encoder_and_publish_odom)
+
+        # ROS2 Publishers and Subscribers
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        self.cmd_vel_subscriber = self.create_subscription(
+            Twist, "/cmd_vel", self.cmd_vel_callback, qos_profile
+        )
+
+        self.odom_publisher = self.create_publisher(Odometry, "/odom", 10)
+
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        # Start the keyboard listener thread for manual control
+        self.keyboard_thread = threading.Thread(target=self.keyboard_listener)
+        self.keyboard_thread.daemon = True
+        self.keyboard_thread.start()
+
+        # Odometry Variables
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
-        self.dt = 0.1  # Time step (100ms)
-        self.left_encoder_count = 0
-        self.right_encoder_count = 0
-        self.wheel_radius = 0.0325
-        self.wheel_base = 0.3    
-
-        # Create a publisher for status messages
-        qos_profile = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
-        self.status_publisher = self.create_publisher(String, 'robot_status', qos_profile)
-        self.odom_publisher = self.create_publisher(Odometry, '/odom', 10)
-        
-        # Initialize TF broadcaster
-        self.tf_broadcaster = TransformBroadcaster(self)
-        
-        # Subscribe to cmd_vel
-        self.cmd_vel_subscriber = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
-        
-        # Connect to Arduino
-        self.connect_to_serial()
-        
-        # Timer for odometry updates
-        self.create_timer(self.dt, self.publish_odometry)
-
-        # Start keyboard listener in a separate thread
-        self.keyboard_thread = threading.Thread(target=self.keyboard_listener_thread)
-        self.keyboard_thread.daemon = True
-        self.keyboard_thread.start()
-        
-        self.get_logger().info('Robot controller initialized. Use keys to control the robot.')
-        self.get_logger().info('Controls: W/A/S/D = Move, Space = Stop, P = Pump On, O = Pump Off, Q = Quit')
-
-    def connect_to_serial(self):
-        try:
-            self.serial_connection = serial.Serial(self.serial_port, self.baud_rate, timeout=1)
-            time.sleep(2)  # Wait for Arduino to reset
-            self.get_logger().info(f'Connected to {self.serial_port}')
-        except serial.SerialException as e:
-            self.get_logger().error(f'Failed to connect to serial port: {e}')
-
-    def read_encoder_data(self):
-        """Read encoder data from Arduino."""
-        if self.serial_connection and self.serial_connection.is_open:
-            try:
-                if self.serial_connection.in_waiting > 0:
-                    line = self.serial_connection.readline().decode('utf-8').strip()
-                    if line.startswith("ENCODER"):
-                        # Parse the encoder data from the Arduino
-                        parts = line.split(',')
-                        for part in parts:
-                            if part.startswith("ENCODER_LEFT"):
-                                self.left_encoder_count = int(part.split(':')[1])
-                            elif part.startswith("ENCODER_RIGHT"):
-                                self.right_encoder_count = int(part.split(':')[1])
-                        return True
-                return False
-            except serial.SerialException as e:
-                self.get_logger().error(f'Serial communication error: {e}')
-                return False
-        return False
+        self.last_time = self.get_clock().now()
+        self.last_left_distance = 0.0
+        self.last_right_distance = 0.0
 
     def send_command(self, command):
-        if self.serial_connection and self.serial_connection.is_open:
-            try:
-                self.serial_connection.write(command.encode())
-                self.current_command = command
-                self.get_logger().info(f'Sent command: {command}')
-                
-                msg = String()
-                msg.data = f'Command: {command}'
-                self.status_publisher.publish(msg)
-            except serial.SerialException as e:
-                self.get_logger().error(f'Serial communication error: {e}')
+        # Send command to Arduino
+        self.serial_port.write(command.encode())
+        self.get_logger().info(f"Sent command: {command}")
 
     def get_key(self):
+        # to get a key press for manual control
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
@@ -119,127 +96,302 @@ class RobotController(Node):
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return key
-    
-    def keyboard_listener_thread(self):
-        self.get_logger().info('Keyboard listener started')
+
+    def keyboard_listener(self):
+        # Manual control using keyboard keys
+        self.get_logger().info(
+            "Use W/A/S/D for movement, P to start pump, O to stop pump, Q to quit"
+        )
         while self.running:
             key = self.get_key()
-            if key.lower() == 'w':
-                self.send_command('F')  # Forward
-            elif key.lower() == 's':
-                self.send_command('B')  # Backward
-            elif key.lower() == 'a':
-                self.send_command('L')  # Left
-            elif key.lower() == 'd':
-                self.send_command('R')  # Right
-            elif key == ' ':
-                self.send_command('S')  # Stop
-            elif key.lower() == 'p':
-                self.send_command('P')  # Pump on
-                self.pumpActive = True
-            elif key.lower() == 'o':
-                self.send_command('O')  # Pump off
-                self.pumpActive = False
-            elif key.lower() == 'q' or key == '\x03':  # q or Ctrl+C
+            if key in ["w", "W"]:
+                self.send_command("F")  # forward
+            elif key in ["s", "S"]:
+                self.send_command("B")  # backward
+            elif key in ["a", "A"]:
+                self.send_command("L")  # left
+            elif key in ["d", "D"]:
+                self.send_command("R")  # right
+            elif key in [" "]:
+                self.send_command("S")  # stop
+            elif key in ["p", "P"]:
+                self.send_command("P")  # pump on
+            elif key in ["o", "O"]:
+                self.send_command("O")  # pump off
+            elif key in ["q", "Q"]:
+                self.get_logger().info("Shutting down...")
                 self.running = False
+                self.send_command("S")  # stop motors before exit
                 break
+
+    def cmd_vel_callback(self, msg):
+        # Callback to handle cmd_vel messages
+        linear_speed = msg.linear.x
+        angular_speed = msg.angular.z
+        self.send_command(f"V{linear_speed},{angular_speed}")
+        self.get_logger().info(
+            f"Received cmd_vel - Linear: {linear_speed}, Angular: {angular_speed}"
+        )
+
+    def read_encoder_and_publish_odom(self):
+        MAX_DRIFT_THRESHOLD = 0.5  # adjust as needed for resetting odom
+
+        if self.serial_port.in_waiting > 0:
+            try:
+                data = self.serial_port.readline().decode().strip()
+                self.get_logger().info(f"Received serial data: {data}")
+
+                # format for distance which will be read from arduino, format MUST BE THE SAME!
+                left_pattern = r"L:(-?[\d.]+)"
+                right_pattern = r"R:(-?[\d.]+)"
+
+                left_match = re.search(left_pattern, data)
+                right_match = re.search(right_pattern, data)
+
+                if left_match and right_match:
+                    left_distance = float(left_match.group(1))
+                    right_distance = float(right_match.group(1))
+                    self.publish_odometry(left_distance, right_distance)
+                    self.get_logger().info(
+                        f"Processed distances - Left: {left_distance:.4f}, Right: {right_distance:.4f}"
+                    )
+
+                    # # check for drift and reset odometry if needed
+                    # # Calculate Euclidean drift distance
+                    # drift_distance = math.sqrt(self.x**2 + self.y**2)
+                    # if drift_distance > MAX_DRIFT_THRESHOLD:
+                    #     self.get_logger().warn(
+                    #         f"Odometry drift exceeds threshold. Resetting odometry."
+                    #     )
+                    #     self.reset_odometry()
+                else:
+                    self.get_logger().warn(
+                        f"Could not extract distances from data: {data}"
+                    )
+            except Exception as e:
+                self.get_logger().error(f"Error processing serial data: {e}")
+
+    def reset_odometry(self):
+        # reset the odometry variables to zero
+        self.x = 0.0
+        self.y = 0.0
+        self.theta = 0.0
+        self.last_left_distance = 0.0
+        self.last_right_distance = 0.0
+        self.get_logger().info("Odometry reset.")
     
-    def cmd_vel_callback(self, msg: Twist):
-        self.linear_velocity = msg.linear.x
-        self.angular_velocity = msg.angular.z
+    def apply_drift_correction(self):
+        # Calculate drift
+        drift_distance = math.sqrt(self.x**2 + self.y**2)
+        
+        if drift_distance > self.DRIFT_THRESHOLD:
+            # Make correction proportional to how much threshold is exceeded
+            excess_drift = drift_distance - self.DRIFT_THRESHOLD
+            max_excess = 1.0  # Define a cap for scaling
+            
+            # Scale correction factor based on excess drift (0.99 to 0.95)
+            scale = min(excess_drift / max_excess, 1.0)
+            correction_factor = 1.0 - (0.05 * scale)
+            
+            # Apply correction
+            self.x *= correction_factor
+            self.y *= correction_factor
+            
+            self.get_logger().info(
+                f"Drift correction applied: {correction_factor:.4f}, "
+                f"Position: ({self.x:.2f}, {self.y:.2f})"
+            )
+    def publish_odometry(self, left_distance, right_distance):
+        current_time = self.get_clock().now()
+        dt = (current_time - self.last_time).nanoseconds / 1e9
 
-        # Determine movement direction based on cmd_vel input
-        if self.linear_velocity > 0:
-            self.send_command('F')  # Forward
-        elif self.linear_velocity < 0:
-            self.send_command('B')  # Backward
-        elif self.angular_velocity > 0:
-            self.send_command('L')  # Left (Rotate CCW)
-        elif self.angular_velocity < 0:
-            self.send_command('R')  # Right (Rotate CW)
+        if dt < 0.001:
+            self.get_logger().warn("Time delta too small, skipping odometry update")
+            return
+
+        # appy scale factor to left and right distances based on arduino code
+        scale_factor = 18.0  # adjust as per arduino readings measurements
+        left_distance = left_distance * scale_factor
+        right_distance = right_distance * scale_factor
+
+        # calculate change in distance since last update
+        delta_left = left_distance - self.last_left_distance
+        delta_right = right_distance - self.last_right_distance
+
+        # Save current values for next iteration
+        self.last_left_distance = left_distance
+        self.last_right_distance = right_distance
+        self.last_time = current_time
+
+        # URDF wheel base value
+        wheel_base = 0.3  # distance between wheels
+
+        if self.use_constant_velocity:
+            # Use constant velocities for testing
+            vx = self.constant_vx
+            vy = self.constant_vy
+            vth = self.constant_vth
+
+            # Simple integration with constant velocities
+            delta_x = (vx * math.cos(self.theta) - vy * math.sin(self.theta)) * dt
+            delta_y = (vx * math.sin(self.theta) + vy * math.cos(self.theta)) * dt
+            delta_theta = vth * dt
         else:
-            self.send_command('S')  # Stop
+            # Calculate the robot's movement from encoder data
+            if abs(delta_right - delta_left) < 0.0001:  # Moving straight
+                # Simple straight line motion
+                delta_x = delta_right * math.cos(self.theta)
+                delta_y = delta_right * math.sin(self.theta)
+                delta_theta = 0.0
+                self.get_logger().debug("Moving straight")
+            else:  # Following an arc
+                # Arc motion formulas - more accurate for differential drive
+                delta_theta = (delta_right - delta_left) / wheel_base
 
-    def publish_odometry(self):
-        # Read encoder data from Arduino
-        self.read_encoder_data()
+                # Arc motion calculation
+                radius = (
+                    wheel_base
+                    * (delta_left + delta_right)
+                    / (2 * (delta_right - delta_left))
+                )
+                delta_x = radius * (
+                    math.sin(self.theta + delta_theta) - math.sin(self.theta)
+                )
+                delta_y = radius * (
+                    -math.cos(self.theta + delta_theta) + math.cos(self.theta)
+                )
 
-        # Calculate displacement and orientation change based on encoder counts
-        # Convert encoder counts to distance traveled (assuming each encoder tick corresponds to a known distance)
-        TICKS_PER_REV = 44 # quadrature so 11 x 4
-        WHEEL_CIRCUMFERENCE = 2 * math.pi * self.wheel_radius
-        
-        left_distance = (self.left_encoder_count / TICKS_PER_REV) * WHEEL_CIRCUMFERENCE
-        right_distance = (self.right_encoder_count / TICKS_PER_REV) * WHEEL_CIRCUMFERENCE
-        
-        # left_distance = self.left_encoder_count * 2 * math.pi * self.wheel_radius / 360  # Convert encoder count to distance
-        # right_distance = self.right_encoder_count * 2 * math.pi * self.wheel_radius / 360
+                # if abs(delta_theta) < 0.0001:
+                #     # Handle very small rotation case to avoid division by zero
+                #     delta_x = delta_right * math.cos(self.theta)
+                #     delta_y = delta_right * math.sin(self.theta)
+                # else:
+                #     # Full arc calculation
+                #     radius = (
+                #         wheel_base
+                #         * (delta_left + delta_right)
+                #         / (2 * (delta_right - delta_left))
+                #     )
+                #     delta_x = radius * (
+                #         math.sin(self.theta + delta_theta) - math.sin(self.theta)
+                #     )
+                #     delta_y = radius * (
+                #         -math.cos(self.theta + delta_theta) + math.cos(self.theta)
+                #     )
+                # self.get_logger().debug(f"Arc motion: radius={radius:.4f}")
 
-        # Calculate the robot's change in position and orientation
-        delta_d = (left_distance + right_distance) / 2  # Average of left and right wheel displacements
-        delta_theta = (right_distance - left_distance) / self.wheel_base  # Difference between wheel displacements
-        delta_x = delta_d * math.cos(self.theta + delta_theta / 2)  # X displacement
-        delta_y = delta_d * math.sin(self.theta + delta_theta / 2)  # Y displacement
+            # For debugging
+            self.get_logger().info(
+                f"Delta left: {delta_left:.6f}, Delta right: {delta_right:.6f}"
+            )
+            self.get_logger().info(
+                f"Position update: dx={delta_x:.6f}, dy={delta_y:.6f}, dth={delta_theta:.6f}"
+            )
 
-        # Update position and orientation
+        # Update robot position and orientation
         self.x += delta_x
         self.y += delta_y
         self.theta += delta_theta
+
+        # Normalize theta to prevent drift over time
+        self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
+
+        # ADD THE DRIFT CORRECTION HERE:
+        # Define drift threshold as a class member or constant
+        DRIFT_THRESHOLD = 0.5  # Meters - adjust based on your robot and environment
         
-        # Create odometry message
+        # Calculate current drift from origin
+        drift_distance = math.sqrt(self.x**2 + self.y**2)
+        
+        # Apply correction when drift exceeds threshold
+        if drift_distance > DRIFT_THRESHOLD:
+            # Start with mild correction
+            correction_factor = 0.9  # the lower you go the more drastic corrections you make
+            # Apply correction
+            self.x *= correction_factor
+            self.y *= correction_factor
+            
+            # Log that correction was applied
+            self.get_logger().info(
+                f"Drift correction applied: {correction_factor:.4f}, "
+                f"Position: ({self.x:.2f}, {self.y:.2f})"
+            )
+
+            self.get_logger().info(
+                f"New position: x={self.x:.6f}, y={self.y:.6f}, theta={self.theta:.6f}"
+            )
+
+
+        self.get_logger().info(
+            f"New position: x={self.x:.6f}, y={self.y:.6f}, theta={self.theta:.6f}"
+        )
+
+        # Calculate quaternion from yaw (theta)
+        qz = math.sin(self.theta * 0.5)
+        qw = math.cos(self.theta * 0.5)
+
+        # Create and publish odometry message
         odom_msg = Odometry()
-        odom_msg.header.stamp = self.get_clock().now().to_msg()
-        odom_msg.header.frame_id = 'odom'
-        odom_msg.child_frame_id = 'base_link'
+        odom_msg.header.stamp = current_time.to_msg()
+        odom_msg.header.frame_id = "odom"
+        odom_msg.child_frame_id = "base_link"
+
+        # Set the position
         odom_msg.pose.pose.position.x = self.x
         odom_msg.pose.pose.position.y = self.y
         odom_msg.pose.pose.position.z = 0.0
-        odom_msg.pose.pose.orientation.x = 0.0
-        odom_msg.pose.pose.orientation.y = 0.0
-        odom_msg.pose.pose.orientation.z = math.sin(self.theta / 2.0)
-        odom_msg.pose.pose.orientation.w = math.cos(self.theta / 2.0)
-        odom_msg.twist.twist.linear.x = delta_d / self.dt  # Linear velocity (distance/time)
-        odom_msg.twist.twist.angular.z = delta_theta / self.dt  # Angular velocity (angle/time)
+        odom_msg.pose.pose.orientation.z = qz
+        odom_msg.pose.pose.orientation.w = qw
+
+        # Set the velocity
+        if self.use_constant_velocity:
+            odom_msg.twist.twist.linear.x = self.constant_vx
+            odom_msg.twist.twist.linear.y = self.constant_vy
+            odom_msg.twist.twist.angular.z = self.constant_vth
+        else:
+            # Calculate velocities from deltas
+            linear_velocity = (delta_right + delta_left) / (2 * dt) if dt > 0 else 0
+            angular_velocity = (
+                (delta_right - delta_left) / (wheel_base * dt) if dt > 0 else 0
+            )
+
+            odom_msg.twist.twist.linear.x = linear_velocity
+            odom_msg.twist.twist.linear.y = 0.0
+            odom_msg.twist.twist.angular.z = angular_velocity
 
         # Publish the odometry message
         self.odom_publisher.publish(odom_msg)
 
-        # Create transform message
-        transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
-        transform.header.frame_id = 'odom'
-        transform.child_frame_id = 'base_link'
-        transform.transform.translation.x = self.x
-        transform.transform.translation.y = self.y
-        transform.transform.translation.z = 0.0
-        transform.transform.rotation.x = 0.0
-        transform.transform.rotation.y = 0.0
-        transform.transform.rotation.z = math.sin(self.theta / 2.0)
-        transform.transform.rotation.w = math.cos(self.theta / 2.0)
-        
-        # Broadcast the transform
-        self.tf_broadcaster.sendTransform(transform)
+        # Also publish the transform
+        t = TransformStamped()
+        t.header.stamp = current_time.to_msg()
+        t.header.frame_id = "odom"
+        t.child_frame_id = "base_link"
+        t.transform.translation.x = self.x
+        t.transform.translation.y = self.y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.z = qz
+        t.transform.rotation.w = qw
+        self.tf_broadcaster.sendTransform(t)
 
-    def shutdown(self):
-        self.running = False
-        if self.serial_connection and self.serial_connection.is_open:
-            self.send_command('S')
-            if self.pumpActive:
-                self.send_command('O')
-            self.serial_connection.close()
-            self.get_logger().info('Serial connection closed.')
+    def destroy_node(self):
+        # Ensure motors are stopped and serial connection is closed before shutdown
+        self.send_command("S")
+        self.serial_port.close()
+        super().destroy_node()
+
 
 def main(args=None):
     rclpy.init(args=args)
-    robot_controller = RobotController()
-    
+    motor_controller = SerialMotorController()
     try:
-        rclpy.spin(robot_controller)
+        rclpy.spin(motor_controller)
     except KeyboardInterrupt:
-        pass
-    
-    robot_controller.shutdown()
-    rclpy.shutdown()
+        motor_controller.get_logger().info("Node stopped by user")
+    finally:
+        motor_controller.destroy_node()
+        rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
