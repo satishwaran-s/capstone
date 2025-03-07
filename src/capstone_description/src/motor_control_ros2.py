@@ -21,15 +21,15 @@ class SerialMotorController(Node):
     def __init__(self):
         super().__init__("serial_motor_controller")
 
-        # Parameters for testing (constant velocities)
+        # parameters for testing constant velocities
         self.declare_parameter(
             "use_constant_velocity", False
-        )  # Changed to False to use encoder data
+        )  # changed to False to use encoder data cos testing real robot
         self.declare_parameter("constant_vx", 0.2)
         self.declare_parameter("constant_vy", 0.0)
         self.declare_parameter("constant_vth", 0.1)
 
-        # Get parameters
+        # get parameters
         self.use_constant_velocity = (
             self.get_parameter("use_constant_velocity").get_parameter_value().bool_value
         )
@@ -43,17 +43,17 @@ class SerialMotorController(Node):
             self.get_parameter("constant_vth").get_parameter_value().double_value
         )
 
-        # Initialize serial connection to Arduino
+        # initialize serial connection to arduino
         self.serial_port = serial.Serial(
             "/dev/ttyUSB1", 115200, timeout=1
-        )  # Change to your Arduino port
+        )  # make sure port is correct
         self.get_logger().info("Connected to Arduino via Serial")
         self.running = True
 
         # create a timer for odometry updates which reads every 0.1 seconds which is 100ms cos we need to publish 10hz
         self.odom_timer = self.create_timer(0.1, self.read_encoder_and_publish_odom)
 
-        # ROS2 Publishers and Subscribers
+        # ros2 pub and sub
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -68,12 +68,12 @@ class SerialMotorController(Node):
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        # Start the keyboard listener thread for manual control
+        # start the keyboard listener thread for manual control
         self.keyboard_thread = threading.Thread(target=self.keyboard_listener)
         self.keyboard_thread.daemon = True
         self.keyboard_thread.start()
 
-        # Odometry Variables
+        # odom Variables
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
@@ -82,7 +82,7 @@ class SerialMotorController(Node):
         self.last_right_distance = 0.0
 
     def send_command(self, command):
-        # Send command to Arduino
+        # send command to arduino
         self.serial_port.write(command.encode())
         self.get_logger().info(f"Sent command: {command}")
 
@@ -98,7 +98,7 @@ class SerialMotorController(Node):
         return key
 
     def keyboard_listener(self):
-        # Manual control using keyboard keys
+        # manual control using keyboard keys
         self.get_logger().info(
             "Use W/A/S/D for movement, P to start pump, O to stop pump, Q to quit"
         )
@@ -125,7 +125,7 @@ class SerialMotorController(Node):
                 break
 
     def cmd_vel_callback(self, msg):
-        # Callback to handle cmd_vel messages
+        # callback to handle /cmd_vel messages
         linear_speed = msg.linear.x
         angular_speed = msg.angular.z
         self.send_command(f"V{linear_speed},{angular_speed}")
@@ -134,7 +134,7 @@ class SerialMotorController(Node):
         )
 
     def read_encoder_and_publish_odom(self):
-        MAX_DRIFT_THRESHOLD = 0.5  # adjust as needed for resetting odom
+        MAX_DRIFT_THRESHOLD = 0.5  # adjust as needed for resetting odom (currently not in use. if want, uncomment reset odom code below)
 
         if self.serial_port.in_waiting > 0:
             try:
@@ -156,8 +156,9 @@ class SerialMotorController(Node):
                         f"Processed distances - Left: {left_distance:.4f}, Right: {right_distance:.4f}"
                     )
 
+                    # # reset odom code
                     # # check for drift and reset odometry if needed
-                    # # Calculate Euclidean drift distance
+                    # # calculate euclidean drift distance
                     # drift_distance = math.sqrt(self.x**2 + self.y**2)
                     # if drift_distance > MAX_DRIFT_THRESHOLD:
                     #     self.get_logger().warn(
@@ -181,19 +182,19 @@ class SerialMotorController(Node):
         self.get_logger().info("Odometry reset.")
     
     def apply_drift_correction(self):
-        # Calculate drift
+        # calculate drift
         drift_distance = math.sqrt(self.x**2 + self.y**2)
         
         if drift_distance > self.DRIFT_THRESHOLD:
-            # Make correction proportional to how much threshold is exceeded
+            # make correction proportional to how much threshold is exceeded
             excess_drift = drift_distance - self.DRIFT_THRESHOLD
-            max_excess = 1.0  # Define a cap for scaling
+            max_excess = 1.0  # Define a cap for scaling, use higher vlaues for bigger area and lower values for smaller area
             
-            # Scale correction factor based on excess drift (0.99 to 0.95)
+            # scale correction factor based on excess drift
             scale = min(excess_drift / max_excess, 1.0)
             correction_factor = 1.0 - (0.05 * scale)
             
-            # Apply correction
+            # apply correction
             self.x *= correction_factor
             self.y *= correction_factor
             
@@ -201,6 +202,7 @@ class SerialMotorController(Node):
                 f"Drift correction applied: {correction_factor:.4f}, "
                 f"Position: ({self.x:.2f}, {self.y:.2f})"
             )
+            
     def publish_odometry(self, left_distance, right_distance):
         current_time = self.get_clock().now()
         dt = (current_time - self.last_time).nanoseconds / 1e9
@@ -210,7 +212,7 @@ class SerialMotorController(Node):
             return
 
         # appy scale factor to left and right distances based on arduino code
-        scale_factor = 18.0  # adjust as per arduino readings measurements
+        scale_factor = 18.0  # adjust as per arduino readings measurements (manually calculated)
         left_distance = left_distance * scale_factor
         right_distance = right_distance * scale_factor
 
@@ -223,32 +225,32 @@ class SerialMotorController(Node):
         self.last_right_distance = right_distance
         self.last_time = current_time
 
-        # URDF wheel base value
+        # URDF wheel base value and actual robot wheel base value (distance between both wheels)
         wheel_base = 0.3  # distance between wheels
 
         if self.use_constant_velocity:
-            # Use constant velocities for testing
+            # use constant velocities for testing
             vx = self.constant_vx
             vy = self.constant_vy
             vth = self.constant_vth
 
-            # Simple integration with constant velocities
+            # integration with constant velocities
             delta_x = (vx * math.cos(self.theta) - vy * math.sin(self.theta)) * dt
             delta_y = (vx * math.sin(self.theta) + vy * math.cos(self.theta)) * dt
             delta_theta = vth * dt
         else:
-            # Calculate the robot's movement from encoder data
-            if abs(delta_right - delta_left) < 0.0001:  # Moving straight
-                # Simple straight line motion
+            # calculate the robot's movement from encoder data
+            if abs(delta_right - delta_left) < 0.0001:  # moving straight
+                # straight line motion
                 delta_x = delta_right * math.cos(self.theta)
                 delta_y = delta_right * math.sin(self.theta)
                 delta_theta = 0.0
                 self.get_logger().debug("Moving straight")
-            else:  # Following an arc
-                # Arc motion formulas - more accurate for differential drive
+            else:  # if following an arc
+                # arc motion formulas which is more accurate for differential drive
                 delta_theta = (delta_right - delta_left) / wheel_base
 
-                # Arc motion calculation
+                # arc motion calculation
                 radius = (
                     wheel_base
                     * (delta_left + delta_right)
@@ -280,7 +282,6 @@ class SerialMotorController(Node):
                 #     )
                 # self.get_logger().debug(f"Arc motion: radius={radius:.4f}")
 
-            # For debugging
             self.get_logger().info(
                 f"Delta left: {delta_left:.6f}, Delta right: {delta_right:.6f}"
             )
@@ -288,30 +289,29 @@ class SerialMotorController(Node):
                 f"Position update: dx={delta_x:.6f}, dy={delta_y:.6f}, dth={delta_theta:.6f}"
             )
 
-        # Update robot position and orientation
+        # update robot position and orientation
         self.x += delta_x
         self.y += delta_y
         self.theta += delta_theta
 
-        # Normalize theta to prevent drift over time
+        # normalize theta to prevent drift over time
         self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
 
-        # ADD THE DRIFT CORRECTION HERE:
-        # Define drift threshold as a class member or constant
-        DRIFT_THRESHOLD = 0.5  # Meters - adjust based on your robot and environment
+        # drift correction
+        DRIFT_THRESHOLD = 0.5  # meters - adjust based on robot and environment drifting value
         
-        # Calculate current drift from origin
+        # calculate current drift from origin
         drift_distance = math.sqrt(self.x**2 + self.y**2)
         
-        # Apply correction when drift exceeds threshold
+        # apply correction when drift exceeds threshold
         if drift_distance > DRIFT_THRESHOLD:
-            # Start with mild correction
-            correction_factor = 0.9  # the lower you go the more drastic corrections you make
-            # Apply correction
+            # start with mild correction
+            correction_factor = 0.9  # start at 0.995 and the lower you go the more drastic corrections you make
+            # apply correction
             self.x *= correction_factor
             self.y *= correction_factor
             
-            # Log that correction was applied
+            # log that correction was applied in the terminal
             self.get_logger().info(
                 f"Drift correction applied: {correction_factor:.4f}, "
                 f"Position: ({self.x:.2f}, {self.y:.2f})"
@@ -326,30 +326,30 @@ class SerialMotorController(Node):
             f"New position: x={self.x:.6f}, y={self.y:.6f}, theta={self.theta:.6f}"
         )
 
-        # Calculate quaternion from yaw (theta)
+        # calculate quaternion from yaw (theta)
         qz = math.sin(self.theta * 0.5)
         qw = math.cos(self.theta * 0.5)
 
-        # Create and publish odometry message
+        # create and publish odometry message
         odom_msg = Odometry()
         odom_msg.header.stamp = current_time.to_msg()
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "base_link"
 
-        # Set the position
+        # set the position
         odom_msg.pose.pose.position.x = self.x
         odom_msg.pose.pose.position.y = self.y
         odom_msg.pose.pose.position.z = 0.0
         odom_msg.pose.pose.orientation.z = qz
         odom_msg.pose.pose.orientation.w = qw
 
-        # Set the velocity
+        # set the velocity
         if self.use_constant_velocity:
             odom_msg.twist.twist.linear.x = self.constant_vx
             odom_msg.twist.twist.linear.y = self.constant_vy
             odom_msg.twist.twist.angular.z = self.constant_vth
         else:
-            # Calculate velocities from deltas
+            # calculate velocities from deltas
             linear_velocity = (delta_right + delta_left) / (2 * dt) if dt > 0 else 0
             angular_velocity = (
                 (delta_right - delta_left) / (wheel_base * dt) if dt > 0 else 0
@@ -359,10 +359,10 @@ class SerialMotorController(Node):
             odom_msg.twist.twist.linear.y = 0.0
             odom_msg.twist.twist.angular.z = angular_velocity
 
-        # Publish the odometry message
+        # publish the odometry message
         self.odom_publisher.publish(odom_msg)
 
-        # Also publish the transform
+        # publish the transform
         t = TransformStamped()
         t.header.stamp = current_time.to_msg()
         t.header.frame_id = "odom"
@@ -375,7 +375,7 @@ class SerialMotorController(Node):
         self.tf_broadcaster.sendTransform(t)
 
     def destroy_node(self):
-        # Ensure motors are stopped and serial connection is closed before shutdown
+        # ensure motors are stopped and serial connection is closed before shutdown
         self.send_command("S")
         self.serial_port.close()
         super().destroy_node()
