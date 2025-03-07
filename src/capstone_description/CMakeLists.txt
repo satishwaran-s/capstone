@@ -19,6 +19,10 @@ install (PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(FILES
+  config/mapper_params_online_async.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
@@ -41,5 +45,8 @@ install(DIRECTORY launch/
 
 install(DIRECTORY src/
   DESTINATION share/${PROJECT_NAME}/src)
+
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}/config)
 
 ament_package()
