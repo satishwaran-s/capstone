@@ -11,16 +11,17 @@ import xacro
 
 
 def generate_launch_description():
-
-    # Check if we're told to use sim time
+    # Common parameters
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_ros2_control = LaunchConfiguration('use_ros2_control')
+    params_file = LaunchConfiguration('params_file')
 
     # Process the URDF file
     pkg_path = os.path.join(get_package_share_directory('capstone_description'))
-    xacro_file = os.path.join(pkg_path,'urdf','spray_paint_robot.urdf.xacro')
-    # robot_description_config = xacro.process_file(xacro_file).toxml()
-    robot_description_config = Command(['xacro ', xacro_file, ' use_ros2_control:=', use_ros2_control, ' sim_mode:=', use_sim_time])
+    xacro_file = os.path.join(pkg_path, 'urdf', 'spray_paint_robot.urdf.xacro')
+    robot_description_config = Command(['xacro ', xacro_file, 
+                                        ' use_ros2_control:=', use_ros2_control, 
+                                        ' sim_mode:=', use_sim_time])
     
     # Create a robot_state_publisher node
     params = {'robot_description': robot_description_config, 'use_sim_time': use_sim_time}
@@ -31,35 +32,43 @@ def generate_launch_description():
         parameters=[params]
     )
 
-    # # Launch the controller_manager node
-    # controller_manager_params = {
-    #     'use_sim_time': use_sim_time,
-    #     'robot_description': robot_description_config,
-    #     'controller_manager': os.path.join(get_package_share_directory('capstone_description'), 'config', 'controller.yaml')
-    # }
-    
-    # node_controller_manager = Node(
-    #     package='controller_manager',
-    #     executable='ros2_control_node',
-    #     name='controller_manager',
-    #     output='screen',
-    #     parameters=[controller_manager_params]
-    # )
+    # SLAM toolbox node with explicit parameters
+    slam_node = Node(
+        package='slam_toolbox',
+        executable='async_slam_toolbox_node',
+        name='slam_toolbox',
+        output='screen',
+        parameters=[
+            params_file,
+            {
+                'mode': 'mapping',
+                'use_sim_time': use_sim_time,
+                'max_laser_range': 8.0,
+                'min_laser_range': 0.4,  # Increased to filter close noise
+                'map_update_interval': 0.5,
+                'resolution': 0.075,
+                'max_covariance': 0.01,
+                'minimum_time_interval': 0.5,
+                'transform_timeout': 0.2,
+                'tf_buffer_duration': 30.,
+                'stack_size_to_use': 40000000,
+                'scan_buffer_size': 10,
+                'scan_topic': '/scan',
+                'map_frame': 'map',
+                'base_frame': 'base_link',
+                'odom_frame': 'odom',
+                'do_loop_closing': True,
+                'loop_serach_distance': 3.0,
+                'smear_deviation': 0.03,
+                'ramge_threshold': 8.0,
+                'loop_match_minimum_chain_size': 5,
+                'use_scan_matching': True,
+                'scan_to_map_refinement': True,
+                'scan_matching_score_threshold': 0.3
 
-
-    # # Launch the differential drive controller node
-    # node_diff_drive = Node(
-    #     package='diff_drive_controller',
-    #     executable='diff_drive_controller_node',
-    #     name='diff_drive',
-    #     output='screen',
-    #     parameters=[{
-    #         'cmd_vel_topic': '/cmd_vel',
-    #         'odom_topic': '/odom',
-    #         'wheel_separation': 0.5,
-    #         'wheel_radius': 0.1
-    #     }]
-    # )
+            }
+        ]
+    )
 
     # Static Transform Publisher for map -> odom
     node_static_transform = Node(
@@ -70,35 +79,38 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
     )
 
-    # node_robot_state_publisher = Node(
-    #     package='robot_state_publisher',
-    #     executable='robot_state_publisher',
-    #     output='screen',
-    #     parameters=[{'use_sim_time': use_sim_time, 'robot_description': robot_description_config}]
-    # )
-
-    slam_node = Node(
-        package= 'slam_toolbox',
-        executable= 'sync_slam_toolbox_node',
-        name= 'slam_toolbox',
-        output= 'screen',
-        parameters= ['/home/satishrpi/capstone_ws/src/capstone_description/config/mapper_params_online_async.yaml']
+    # Optional odometry broadcaster
+    odom_broadcaster_node = Node(
+        package='capstone_description',
+        executable='motor_control_ros2.py',
+        name='motor_control_ros2',
+        output='screen'
     )
 
-    # Launch!
+    # Launch description with all declarations and nodes
     return LaunchDescription([
+        # Declare launch arguments
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',
-            description='Use sim time if true'),
+            description='Use simulation/Gazebo clock'
+        ),
         DeclareLaunchArgument(
             'use_ros2_control',
             default_value='true',
-            description='Use ros2_control if true'),
+            description='Use ros2_control if true'
+        ),
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=os.path.join(get_package_share_directory('capstone_description'), 
+                                      'config', 'mapper_params_online_async.yaml'),
+            description='Full path to the parameter file'
+        ),
 
+        # Add the nodes to the launch description
         node_robot_state_publisher,
-        # slam_node
-        # node_static_transform
-        # node_controller_manager,
-        # node_diff_drive
+        slam_node,
+        # node_static_transform,  # Uncommented to ensure map->odom transform
+        # odom_broadcaster_node,  # Keep commented unless you need it
     ])
+
