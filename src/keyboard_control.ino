@@ -17,8 +17,8 @@ const int liquid_sensor = 2;
 // encoder pins
 const int encoderARightPin = 18; // yellow
 const int encoderBRightPin = 19; // green
-const int encoderALeftPin = 20; // yellow
-const int encoderBLeftPin = 21; // green
+const int encoderALeftPin = 21; // yellow
+const int encoderBLeftPin = 20; // green
 
 // encoder counts
 volatile int leftEncoderCount = 0;
