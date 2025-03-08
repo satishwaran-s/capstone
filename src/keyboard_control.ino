@@ -15,10 +15,10 @@ const int pumpPWM = 3;
 const int liquid_sensor = 2;
 
 // encoder pins
-const int encoderARightPin = 18;
-const int encoderBRightPin = 19;
-const int encoderALeftPin = 20;
-const int encoderBLeftPin = 21;
+const int encoderARightPin = 18; // yellow
+const int encoderBRightPin = 19; // green
+const int encoderALeftPin = 20; // yellow
+const int encoderBLeftPin = 21; // green
 
 // encoder counts
 volatile int leftEncoderCount = 0;
