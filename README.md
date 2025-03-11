@@ -14,7 +14,7 @@ These are the used repository:
   - [Slam_toolbox](https://github.com/SteveMacenski/slam_toolbox) (explored)
   - [SLAM gmapping Humble](https://github.com/GMHadou/slam_gmapping_Humble)
    
-The main contents of the project are stored in the src folder.
+This repository includes additional files related to the project's development, but the core contents of the project are as follows:
 - **capstone_description contains**:
   - **urdf**
     - lidar.xacro
@@ -23,6 +23,9 @@ The main contents of the project are stored in the src folder.
     - spray_paint_robot.urdf.xacro
   - **launch**
      - display.launch.py
+
+## How to run
+This section will slowly be updated
 
 ## Contributions
 I'm open to feedback and contributions! If you have suggestions for improvements, additional implementations, or even new topics to explore, feel free to open an issue or a pull request.
