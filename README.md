@@ -1,6 +1,6 @@
 # Capstone
 
-This repository is dedicated to my journey of producing my capstone project - Automated Spray Painting Robot from scratch.
+This repository is dedicated to the development of my capstone project: the Automated Spray Painting Robot, built from scratch.
 
 I will update the files with as I progress through the project.
 
