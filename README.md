@@ -10,6 +10,9 @@ These are the used repository:
 - **LiDAR**:
   - [YDLidar ROS2 Driver](https://github.com/YDLIDAR/ydlidar_ros2_driver.git)
   - [YDLidar SDK](https://github.com/YDLIDAR/YDLidar-SDK.git)
+- **SLAM**:
+  - [Slam_toolbox](https://github.com/SteveMacenski/slam_toolbox) (explored)
+  - [SLAM gmapping Humble](https://github.com/GMHadou/slam_gmapping_Humble)
    
 The main contents of the project are stored in the src folder.
 - **capstone_description contains**:
