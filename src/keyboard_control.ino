@@ -1,88 +1,108 @@
-
-
-// motor A pins
-const int motorAIn1 = 47;
-const int motorAIn2 = 49;
+// Motor A pins
+const int motorAIn4 = 47;
+const int motorAIn3 = 49;
 const int motorAPWM = 10;
 
-// motor B pins
-const int motorBIn3 = 43;
-const int motorBIn4 = 45;
+// Motor B pins
+const int motorBIn2 = 43;
+const int motorBIn1 = 45;
 const int motorBPWM = 9;
 
-// pump control pins
+// Pump control pins
 const int pumpIn1 = 5;
 const int pumpIn2 = 4;
 const int pumpPWM = 3;
-const int liquid_sensor = 2;
+const int liquid_sensor = 2;  // Liquid sensor pin
 
-// encoder pins
+// Encoder pins
+const int encoderALeftPin = 21;  // yellow
+const int encoderBLeftPin = 20;  // green
 const int encoderARightPin = 18; // yellow
 const int encoderBRightPin = 19; // green
-const int encoderALeftPin = 21; // yellow
-const int encoderBLeftPin = 20; // green
 
-// encoder counts
+// Encoder counts (signed for direction)
 volatile int leftEncoderCount = 0;
 volatile int rightEncoderCount = 0;
+float totalLinearDistance = 0.0; // Store total linear distance
 
-unsigned long lastTime = 0;
-// Global variables (corrected)
-//unsigned long lastTimeLeft = 0;
-//unsigned long lastTimeRight = 0;
-const unsigned long debounceDelay = 15;  // debounce time in ms
-
-// motor and wheel specs
+// Motor and wheel specs
 const float wheelDiameter = 0.065;  // 65mm = 0.065m
-const int ppr = 11;  // pulses per revolution 
-const int gear_ratio = 150;  // 150:1 gear reduction
+const int ppr = 11;                 // Pulses per revolution 
+const int gear_ratio = 150;         // 150:1 gear reduction
+const float wheelbase = 0.33;       // Distance between wheels in meters
+const float scale_factor = 2.0;   // Scaling factor for distance calculation
 
-const float wheelbase = 0.33;
-const int scale_factor = 100;
+// State tracking
+bool isRotating = false;            // Whether robot is turning
+bool isMoving = false;              // Whether motors are active
+int motorState = 0;                 // 0=stop, 1=forward, 2=backward, 3=left, 4=right
 
-// calculated constants
-const float wheelCircumference = 3.1416 * wheelDiameter;
-const float counts_per_wheel_rev = ppr * 4 * gear_ratio;  // quadrature encoding cos of AB dual phase
+// Calculated constants
+const float wheelCircumference = PI * wheelDiameter;
+const float counts_per_wheel_rev = ppr * 4 * gear_ratio;  // Quadrature encoding
 const float distance_per_count = wheelCircumference / counts_per_wheel_rev;
 
-int baseSpeed = 255;  // base speed for motors
+int baseSpeed = 180;  // Base motor speed
 
-// PID control variables
+bool pumpActive = false;  // Track if pump should be active
+
+// PID constants
 float Kp = 2.0, Ki = 0.1, Kd = 0.05;
 float errorPrev = 0, errorIntegral = 0;
 unsigned long lastPidTime = 0;
 
-bool isRotating = false;  // Variable to determine whether the robot is rotating or moving straight
+// Last sent values to avoid duplicate output when stopped
+float lastLinear = 0;
+float lastAngular = 0;
+unsigned long lastUpdateTime = 0;
+
+// Variables for final angular rotation
+float totalAngularRotation = 0.0;  // Store final cumulative angular rotation
+
+// Function Prototypes
+void handleLeftEncoder();
+void handleRightEncoder();
+void handleSerialCommand();
+void startPump();
+void stopPump();
+void updatePid();
+void resetPid();
+void moveForward();
+void moveBackward();
+void turnLeft();
+void turnRight();
+void stopMotors();
+void setMotorSpeeds(int leftSpeed, int rightSpeed);
 
 void setup() {
     Serial.begin(115200);
-
-    pinMode(encoderALeftPin, INPUT_PULLUP);  
-    pinMode(encoderBLeftPin, INPUT_PULLUP);
-    pinMode(encoderARightPin, INPUT_PULLUP);
-    pinMode(encoderBRightPin, INPUT_PULLUP);
-
-    // motors and pump pins setup
-    pinMode(motorAIn1, OUTPUT);
-    pinMode(motorAIn2, OUTPUT);
+    
+    // Initialize motor control pins
+    pinMode(motorAIn4, OUTPUT);
+    pinMode(motorAIn3, OUTPUT);
     pinMode(motorAPWM, OUTPUT);
-    pinMode(motorBIn3, OUTPUT);
-    pinMode(motorBIn4, OUTPUT);
+    pinMode(motorBIn2, OUTPUT);
+    pinMode(motorBIn1, OUTPUT);
     pinMode(motorBPWM, OUTPUT);
+    
+    // Initialize pump control pins
     pinMode(pumpIn1, OUTPUT);
     pinMode(pumpIn2, OUTPUT);
     pinMode(pumpPWM, OUTPUT);
     pinMode(liquid_sensor, INPUT);
 
-    // enoder pins setup
-    pinMode(encoderALeftPin, INPUT);
-    pinMode(encoderBLeftPin, INPUT);
-    pinMode(encoderARightPin, INPUT);
-    pinMode(encoderBRightPin, INPUT);
+    // Initialize encoder pins
+    pinMode(encoderALeftPin, INPUT_PULLUP);
+    pinMode(encoderBLeftPin, INPUT_PULLUP);
+    pinMode(encoderARightPin, INPUT_PULLUP);
+    pinMode(encoderBRightPin, INPUT_PULLUP);
+    
+    // Attach encoder interrupts with CHANGE for better quadrature detection
+    attachInterrupt(digitalPinToInterrupt(encoderALeftPin), handleLeftEncoder, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(encoderARightPin), handleRightEncoder, CHANGE);
 
-    // attach interrupts for encoder readings
-    attachInterrupt(digitalPinToInterrupt(encoderALeftPin), leftEncoder, RISING);
-    attachInterrupt(digitalPinToInterrupt(encoderARightPin), rightEncoder, RISING);
+    // Initialize motors to stopped state
+    stopMotors();
 }
 
 void loop() {
@@ -90,50 +110,102 @@ void loop() {
         handleSerialCommand();
     }
 
-    // Calculate odometry
-    float leftDist = leftEncoderCount * (distance_per_count * scale_factor);
-    float rightDist = rightEncoderCount * (distance_per_count * scale_factor);
+    // Check the liquid sensor and control the pump accordingly
+    if (pumpActive) {
+        int liquid_level = digitalRead(liquid_sensor);
+        if (liquid_level == LOW) {  // Liquid detected
+            Serial.println("Liquid detected! Pumping...");
+            startPump();
+        } else {  // No liquid detected
+            Serial.println("No liquid detected. Stopping pump.");
+            stopPump();  // Stop pump if no liquid is detected
+        }
+    }
+
+    // Get current encoder distances
+    float leftDist = leftEncoderCount * distance_per_count * scale_factor;
+    float rightDist = rightEncoderCount * distance_per_count * scale_factor;
     
-    // Compute linear and angular velocities
-    float linear = (isRotating) ? 0 : (leftDist + rightDist) / 2.0;
-    float angular = (rightDist - leftDist) / wheelbase;
+    // Calculate odometry
+    float linearChange = 0;
+    float angularChange = 0;
+    
+    if (isMoving) {
+        // Calculate linear and angular changes
+        linearChange = (leftDist + rightDist) / 2.0;
+        angularChange = (rightDist - leftDist) / wheelbase;
+        
+        // Update total linear distance only when moving straight
+        if (!isRotating) {
+            totalLinearDistance += linearChange;
+        }
+        
+        // Accumulate the total angular rotation
+        totalAngularRotation += angularChange;
+        
+        // Reset encoder counts after processing
+        leftEncoderCount = 0;
+        rightEncoderCount = 0;
+    }
+    
+    // Use total distance for linear movement, final cumulative angle for angular
+    float linear = totalLinearDistance;
+    float angular = totalAngularRotation;
+    
+    // Only send data if we're moving or values have changed
+    unsigned long currentTime = millis();
+    float timestamp = currentTime / 1000.0;
+    
+    // Don't send duplicate data when stopped
+    bool shouldSendData = isMoving || 
+                          (linear != lastLinear) || 
+                          (angular != lastAngular) ||
+                          ((currentTime - lastUpdateTime) > 50); // Force update every second
+    
+    if (shouldSendData) {
+        // Format for ROS compatibility
+        Serial.print("D:");
+        Serial.print(linear, 4);
+        Serial.print(" A:");
+        Serial.print(angular, 4);
+        Serial.print(" T:");
+        Serial.println(timestamp);
+        lastLinear = linear;
+        lastAngular = angular;
+        lastUpdateTime = currentTime;
+    }
 
-    // Serial output for debugging and visualization
-    Serial.print("D:");
-    Serial.print(linear, 4);  // send left distance with 4 decimal places
-    Serial.print(" A:");
-    Serial.println(angular, 4); // send right distance with 4 decimal places
-
-    // Apply PID control to adjust robot's motion
-    updatePid();
-
-    delay(100); // send data every 100 ms to match odometry update frequency
+    delay(50); // Small delay to allow the pump logic to run smoothly
 }
 
-void updatePid() {
-    unsigned long currentTime = millis();
-    float dt = (currentTime - lastPidTime) / 1000.0;
-    lastPidTime = currentTime;
+// Encoder handlers with improved quadrature detection
+void handleLeftEncoder() {
+    static int lastA = LOW;
+    int a = digitalRead(encoderALeftPin);
+    int b = digitalRead(encoderBLeftPin);
+    
+    if (a != lastA) {
+        if (b != a) {
+            leftEncoderCount++;  // Forward direction
+        } else {
+            leftEncoderCount--;  // Backward direction
+        }
+        lastA = a;
+    }
+}
 
-    if (dt > 0 && dt < 1.0) {
-        // Compute error for both linear and angular
-        float leftDist = leftEncoderCount * (distance_per_count * scale_factor);
-        float rightDist = rightEncoderCount * (distance_per_count * scale_factor);
-        
-        float error = leftDist - rightDist;
-        float proportional = Kp * error;
-        errorIntegral += Ki * error * dt;  // Accumulate error over time
-        float derivative = Kd * (error - errorPrev) / dt;
-
-        // Adjust speed for motors based on PID output
-        int correction = proportional + errorIntegral + derivative;
-        errorPrev = error;
-
-        int leftSpeed = constrain(baseSpeed - correction, 0, 255);
-        int rightSpeed = constrain(baseSpeed + correction, 0, 255);
-
-        // Adjust motor speeds based on PID feedback
-        setMotorSpeeds(leftSpeed, rightSpeed);
+void handleRightEncoder() {
+    static int lastA = LOW;
+    int a = digitalRead(encoderARightPin);
+    int b = digitalRead(encoderBRightPin);
+    
+    if (a != lastA) {
+        if (b == a) {  // Reverse phase relationship for right wheel
+            rightEncoderCount++;  // Forward direction
+        } else {
+            rightEncoderCount--;  // Backward direction
+        }
+        lastA = a;
     }
 }
 
@@ -141,28 +213,38 @@ void handleSerialCommand() {
     char command = Serial.read();
     switch (command) {
         case 'F': case 'f': 
-            isRotating = false;  // Disable rotation mode
+            resetPid();
+            isRotating = false;
+            motorState = 1;
             moveForward(); 
             break;
         case 'B': case 'b': 
-            isRotating = false;  // Disable rotation mode
+            resetPid();
+            isRotating = false;
+            motorState = 2;
             moveBackward(); 
             break;
         case 'L': case 'l': 
-            isRotating = true;  // Enable rotation mode
+            resetPid();
+            isRotating = true;
+            motorState = 3;
             turnLeft(); 
             break;
         case 'R': case 'r': 
-            isRotating = true;  // Enable rotation mode
+            resetPid();
+            isRotating = true;
+            motorState = 4;
             turnRight(); 
             break;
         case 'S': case 's': 
+            motorState = 0;
             stopMotors(); 
             break;
         case 'P': case 'p': 
-            startPump(); 
+            pumpActive = true; // Start the pump when 'P' is pressed
             break;
         case 'O': case 'o': 
+            pumpActive = false; // Stop the pump when 'O' is pressed
             stopPump(); 
             break;
     }
@@ -170,95 +252,67 @@ void handleSerialCommand() {
 
 // Motor control functions
 void moveForward() {
+    isMoving = true;
+    digitalWrite(motorAIn4, LOW);
+    digitalWrite(motorAIn3, HIGH);
+    digitalWrite(motorBIn2, LOW);
+    digitalWrite(motorBIn1, HIGH);
     setMotorSpeeds(baseSpeed, baseSpeed);
-    digitalWrite(motorAIn1, LOW);
-    digitalWrite(motorAIn2, HIGH);
-    digitalWrite(motorBIn3, LOW);
-    digitalWrite(motorBIn4, HIGH);
 }
 
 void moveBackward() {
+    isMoving = true;
+    digitalWrite(motorAIn4, HIGH);
+    digitalWrite(motorAIn3, LOW);
+    digitalWrite(motorBIn2, HIGH);
+    digitalWrite(motorBIn1, LOW);
     setMotorSpeeds(baseSpeed, baseSpeed);
-    digitalWrite(motorAIn1, HIGH);
-    digitalWrite(motorAIn2, LOW);
-    digitalWrite(motorBIn3, HIGH);
-    digitalWrite(motorBIn4, LOW);
-}
-
-void turnRight() {
-    setMotorSpeeds(baseSpeed, baseSpeed);
-    digitalWrite(motorAIn1, LOW);
-    digitalWrite(motorAIn2, HIGH);
-    digitalWrite(motorBIn3, HIGH);
-    digitalWrite(motorBIn4, LOW);
 }
 
 void turnLeft() {
+    isMoving = false;
+    digitalWrite(motorAIn4, LOW);
+    digitalWrite(motorAIn3, HIGH);
+    digitalWrite(motorBIn2, HIGH);
+    digitalWrite(motorBIn1, LOW);
     setMotorSpeeds(baseSpeed, baseSpeed);
-    digitalWrite(motorAIn1, HIGH);
-    digitalWrite(motorAIn2, LOW);
-    digitalWrite(motorBIn3, LOW);
-    digitalWrite(motorBIn4, HIGH);
+}
+
+void turnRight() {
+    isMoving = false;
+    digitalWrite(motorAIn4, HIGH);
+    digitalWrite(motorAIn3, LOW);
+    digitalWrite(motorBIn2, LOW);
+    digitalWrite(motorBIn1, HIGH);
+    setMotorSpeeds(baseSpeed, baseSpeed);
 }
 
 void stopMotors() {
+    isMoving = false;
     setMotorSpeeds(0, 0);
-    digitalWrite(motorAIn1, LOW);
-    digitalWrite(motorAIn2, LOW);
-    digitalWrite(motorBIn3, LOW);
-    digitalWrite(motorBIn4, LOW);
 }
 
-// Helper function to control motor speeds
-void setMotorSpeeds(int speedA, int speedB) {
-    analogWrite(motorAPWM, speedA);
-    analogWrite(motorBPWM, speedB);
+void setMotorSpeeds(int leftSpeed, int rightSpeed) {
+    analogWrite(motorAPWM, leftSpeed);
+    analogWrite(motorBPWM, rightSpeed);
 }
 
 // Pump control functions
 void startPump() {
     digitalWrite(pumpIn1, HIGH);
     digitalWrite(pumpIn2, LOW);
-    analogWrite(pumpPWM, 255);  // full speed for the pump
+    analogWrite(pumpPWM, 255); // Full speed
 }
 
 void stopPump() {
     digitalWrite(pumpIn1, LOW);
     digitalWrite(pumpIn2, LOW);
-    analogWrite(pumpPWM, 0);  // off the pump
+    analogWrite(pumpPWM, 0); // Turn off pump
 }
 
-
-//// Left encoder ISR
-//void leftEncoder() {
-//    unsigned long currentTime = millis();
-//    if (currentTime - lastTimeLeft > debounceDelay) {
-//        leftEncoderCount++;
-//        lastTimeLeft = currentTime;
-//    }
-//}
-//
-//// Right encoder ISR
-//void rightEncoder() {
-//    unsigned long currentTime = millis();
-//    if (currentTime - lastTimeRight > debounceDelay) {
-//        rightEncoderCount++;
-//        lastTimeRight = currentTime;
-//    }
-//}
-
-void leftEncoder() {
-    unsigned long currentTime = millis();
-    if (currentTime - lastTime > debounceDelay) {
-        leftEncoderCount++;
-        lastTime = currentTime;
-    }
+void resetPid() {
+    errorPrev = 0;
+    errorIntegral = 0;
+    lastPidTime = millis();
 }
 
-void rightEncoder() {
-    unsigned long currentTime = millis();
-    if (currentTime - lastTime > debounceDelay) {
-        rightEncoderCount++;
-        lastTime = currentTime;
-    }
-}
