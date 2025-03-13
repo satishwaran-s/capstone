@@ -274,7 +274,7 @@ void moveBackward() {
     setMotorSpeeds(baseSpeed, baseSpeed);
 }
 
-void turnLeft() {
+void turnRight() {
     isMoving = false;
     digitalWrite(motorAIn4, LOW);
     digitalWrite(motorAIn3, HIGH);
@@ -283,7 +283,7 @@ void turnLeft() {
     setMotorSpeeds(baseSpeed, baseSpeed);
 }
 
-void turnRight() {
+void turnLeft() {
     isMoving = false;
     digitalWrite(motorAIn4, HIGH);
     digitalWrite(motorAIn3, LOW);
