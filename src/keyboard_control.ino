@@ -47,7 +47,7 @@ int baseSpeed = 180;  // base motor speed
 bool pumpActive = false;  // track if pump should be active
 
 // PID constants
-float Kp = 2.0, Ki = 0.1, Kd = 0.05;
+float Kp = 2.5, Ki = 0.1, Kd = 0.05;
 float errorPrev = 0, errorIntegral = 0;
 unsigned long lastPidTime = 0;
 
@@ -135,7 +135,7 @@ void loop() {
     float linearChange = 0;
     float angularChange = 0;
     
-    if (isMoving) {
+    if (isMoving || isRotating) {
         // calculate linear and angular changes
         linearChange = (leftDist + rightDist) / 2.0;
         angularChange = (rightDist - leftDist) / wheelbase;
@@ -262,7 +262,7 @@ void moveForward() {
     digitalWrite(motorAIn3, HIGH);
     digitalWrite(motorBIn2, LOW);
     digitalWrite(motorBIn1, HIGH);
-    setMotorSpeeds(baseSpeed, baseSpeed);
+    setMotorSpeeds(baseSpeed, 200);
 }
 
 void moveBackward() {
@@ -281,6 +281,7 @@ void turnRight() {
     digitalWrite(motorBIn2, HIGH);
     digitalWrite(motorBIn1, LOW);
     setMotorSpeeds(baseSpeed, baseSpeed);
+    
 }
 
 void turnLeft() {
