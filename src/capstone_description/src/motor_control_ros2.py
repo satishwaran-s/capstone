@@ -21,31 +21,16 @@ class SerialMotorController(Node):
     def __init__(self):
         super().__init__("serial_motor_controller")
 
-        # Parameters
-        self.declare_parameter("use_constant_velocity", False)
-        self.declare_parameter("constant_vx", 0.2)
-        self.declare_parameter("constant_vy", 0.0)
-        self.declare_parameter("constant_vth", 0.1)
+        # parameters
         self.declare_parameter("serial_port", "/dev/ttyUSB1")
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("wheel_base", 0.33)
         self.declare_parameter("drift_threshold", 0.5)
-        self.declare_parameter("scale_factor", 2.0)
+        self.declare_parameter("linear_scale", 1.0) 
+        self.declare_parameter("angular_scale", 1.0)
 
-        # Get parameters
-        self.use_constant_velocity = (
-            self.get_parameter("use_constant_velocity").get_parameter_value().bool_value
-        )
-        self.constant_vx = (
-            self.get_parameter("constant_vx").get_parameter_value().double_value
-        )
-        self.constant_vy = (
-            self.get_parameter("constant_vy").get_parameter_value().double_value
-        )
-        self.constant_vth = (
-            self.get_parameter("constant_vth").get_parameter_value().double_value
-        )
+        # get parameters
         self.serial_port_name = (
             self.get_parameter("serial_port").get_parameter_value().string_value
         )
@@ -61,11 +46,11 @@ class SerialMotorController(Node):
         self.DRIFT_THRESHOLD = (
             self.get_parameter("drift_threshold").get_parameter_value().double_value
         )
-        self.scale_factor = (
-            self.get_parameter("scale_factor").get_parameter_value().double_value
-        )
+        self.linear_scale = self.get_parameter("linear_scale").get_parameter_value().double_value
+        self.angular_scale = self.get_parameter("angular_scale").get_parameter_value().double_value
 
-        # Initialize serial connection to Arduino
+
+        # initialise serial connection to arduno
         try:
             self.serial_port = serial.Serial(self.serial_port_name, 115200, timeout=1)
             self.get_logger().info(
@@ -76,11 +61,9 @@ class SerialMotorController(Node):
             raise e
 
         self.running = True
+        self.odom_timer = self.create_timer(0.05, self.read_encoder_and_publish_odom)
 
-        # Create a timer for odometry updates which reads every 0.1 seconds
-        self.odom_timer = self.create_timer(0.1, self.read_encoder_and_publish_odom)
-
-        # ROS2 Publishers and Subscribers
+        # ROS2 publishers and subscribers
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -93,17 +76,8 @@ class SerialMotorController(Node):
 
         self.odom_publisher = self.create_publisher(Odometry, "/odom", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
-        self.static_tf_broadcaster = StaticTransformBroadcaster(self)
 
-        # Publish static transform from base_link to laser if using a lidar
-        self.publish_static_transforms()
-
-        # Start the keyboard listener thread for manual control
-        self.keyboard_thread = threading.Thread(target=self.keyboard_listener)
-        self.keyboard_thread.daemon = True
-        self.keyboard_thread.start()
-
-        # Odometry Variables
+        # odom variables
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
@@ -111,31 +85,44 @@ class SerialMotorController(Node):
         self.prev_linear = 0.0
         self.prev_angular = 0.0
 
-    def publish_static_transforms(self):
-        # Publish static transform from base_link to laser
-        # Adjust these values based on your robot's physical configuration
-        laser_transform = TransformStamped()
-        laser_transform.header.stamp = self.get_clock().now().to_msg()
-        laser_transform.header.frame_id = self.base_frame
-        laser_transform.child_frame_id = "laser"
+        # start keyboard listener
+        self.keyboard_thread = threading.Thread(target=self.keyboard_listener)
+        self.keyboard_thread.daemon = True
+        self.keyboard_thread.start()
 
-        # Set the position of the laser relative to base_link
-        # Adjust these values based on your robot's physical dimensions
-        laser_transform.transform.translation.x = 0.1  # 10cm forward from base_link
-        laser_transform.transform.translation.y = 0.0  # centered on y-axis
-        laser_transform.transform.translation.z = 0.15  # 15cm above base_link
+    def update_odometry(self, linear_distance, angular_rotation):
+        now = self.get_clock().now()
+        dt = (now - self.last_time).nanoseconds / 1e9
+        if dt <= 0.001:
+            return
 
-        # No rotation (laser is aligned with base_link)
-        laser_transform.transform.rotation.x = 0.0
-        laser_transform.transform.rotation.y = 0.0
-        laser_transform.transform.rotation.z = 0.0
-        laser_transform.transform.rotation.w = 1.0
+        self.theta += angular_rotation
+        self.x += linear_distance * math.cos(self.theta)
+        self.y += linear_distance * math.sin(self.theta)
+        self.last_time = now
 
-        # self.static_tf_broadcaster.sendTransform(laser_transform)
-        # self.get_logger().info("Published static transform from base_link to laser")
+        odom_msg = Odometry()
+        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        # odom_msg.header.stamp = now.to_msg()
+        odom_msg.header.frame_id = self.odom_frame
+        odom_msg.child_frame_id = self.base_frame
+        odom_msg.pose.pose.position.x = self.x
+        odom_msg.pose.pose.position.y = self.y
+
+        self.odom_publisher.publish(odom_msg)
+        self.broadcast_transform()
+
+    def broadcast_transform(self):
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = self.odom_frame
+        transform.child_frame_id = self.base_frame
+        transform.transform.translation.x = self.x
+        transform.transform.translation.y = self.y
+        transform.transform.rotation.z = math.sin(self.theta / 2.0)
+        self.tf_broadcaster.sendTransform(transform)
 
     def send_command(self, command):
-        # Send command to Arduino
         try:
             self.serial_port.write(command.encode())
             self.get_logger().info(f"Sent command: {command}")
@@ -143,7 +130,6 @@ class SerialMotorController(Node):
             self.get_logger().error(f"Error sending command: {e}")
 
     def get_key(self):
-        # to get a key press for manual control
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
@@ -153,8 +139,12 @@ class SerialMotorController(Node):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return key
 
+    def print_final_odometry(self):
+        self.get_logger().info(
+            f"Final Odometry - Total X: {self.x:.2f}, Total Angular: {self.theta:.2f}"
+        )
+
     def keyboard_listener(self):
-        # Manual control using keyboard keys
         self.get_logger().info(
             "Use W/A/S/D for movement, P to start pump, O to stop pump, Q to quit, R to reset odometry"
         )
@@ -175,70 +165,42 @@ class SerialMotorController(Node):
             elif key in ["o", "O"]:
                 self.send_command("O")  # pump off
             elif key in ["r", "R"]:
-                self.reset_odometry()  # reset odometry
+                self.reset_odometry()  # reset odometry to be used when neeeded 
             elif key in ["q", "Q"]:
                 self.get_logger().info("Shutting down...")
                 self.running = False
                 self.send_command("S")  # stop motors before exit
+                
+                # clearing the serial buffer so that it tries to print the final odom values instead of waiting
+                while self.serial_port.in_waiting > 0:
+                    self.serial_port.readline()
+                
+                # print final odom  
+                self.print_final_odometry()
                 break
 
     def cmd_vel_callback(self, msg):
-        # Callback to handle cmd_vel messages
         linear_speed = msg.linear.x
         angular_speed = msg.angular.z
 
-        # Map linear and angular speeds to motor commands
         if abs(linear_speed) < 0.05 and abs(angular_speed) < 0.05:
-            # If speeds are very small, stop motors
             self.send_command("S")
         elif abs(angular_speed) > 0.5:
-            # If angular speed is high, turn in place
             if angular_speed > 0:
-                self.send_command("L")  # Turn left
+                self.send_command("L")  # turn left
             else:
-                self.send_command("R")  # Turn right
+                self.send_command("R")  # turn right
         else:
-            # Forward/backward movement
             if linear_speed > 0:
-                self.send_command("F")  # Forward
+                self.send_command("F")  # forward
             else:
-                self.send_command("B")  # Backward
+                self.send_command("B")  # backward
 
         self.get_logger().info(
             f"Received cmd_vel - Linear: {linear_speed}, Angular: {angular_speed}"
         )
 
-    def read_encoder_and_publish_odom(self):
-        if self.serial_port.in_waiting > 0:
-            try:
-                data = self.serial_port.readline().decode().strip()
-                self.get_logger().debug(f"Received serial data: {data}")
-
-                # Changed pattern to match the Arduino output format D:x.xxxx A:x.xxxx
-                linear_pattern = r"D:(-?[\d.]+)"
-                angular_pattern = r"A:(-?[\d.]+)"
-
-                linear_match = re.search(linear_pattern, data)
-                angular_match = re.search(angular_pattern, data)
-
-                if linear_match and angular_match:
-                    linear_distance = float(linear_match.group(1))
-                    angular_rotation = float(angular_match.group(1))
-                    self.publish_odometry_from_distance_angle(
-                        linear_distance, angular_rotation
-                    )
-                    self.get_logger().debug(
-                        f"Processed data - Linear: {linear_distance:.4f}, Angular: {angular_rotation:.4f}"
-                    )
-                else:
-                    self.get_logger().warn(
-                        f"Could not extract distances from data: {data}"
-                    )
-            except Exception as e:
-                self.get_logger().error(f"Error processing serial data: {e}")
-
     def reset_odometry(self):
-        # reset the odometry variables to zero
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
@@ -247,91 +209,121 @@ class SerialMotorController(Node):
         self.get_logger().info("Odometry reset.")
 
     def apply_drift_correction(self):
-        # Calculate drift
-        drift_distance = math.sqrt(self.x**2 + self.y**2)
-
+        drift_distance = math.sqrt(self.x * self.x + self.y * self.y)
         if drift_distance > self.DRIFT_THRESHOLD:
-            # Make correction proportional to how much threshold is exceeded
             excess_drift = drift_distance - self.DRIFT_THRESHOLD
-            max_excess = 1.0  # Define a cap for scaling
-
-            # Scale correction factor based on excess drift (0.99 to 0.95)
+            max_excess = 1.0
             scale = min(excess_drift / max_excess, 1.0)
             correction_factor = 1.0 - (0.05 * scale)
-
-            # Apply correction
             self.x *= correction_factor
             self.y *= correction_factor
-
             self.get_logger().info(
-                f"Drift correction applied: {correction_factor:.4f}, "
-                f"Position: ({self.x:.2f}, {self.y:.2f})"
+                f"Drift correction applied: {correction_factor:.4f}, Position: ({self.x:.2f}, {self.y:.2f})"
             )
 
+    def read_encoder_and_publish_odom(self):    
+        if self.serial_port.in_waiting > 0:
+            try:
+                # read and decode data
+                data = self.serial_port.readline().decode().strip()
+                
+                self.get_logger().debug(f"Raw serial data: {data}")
+
+                # initialise values
+                linear_distance = None
+                angular_rotation = None
+
+                # split data into components (handles "D:... A:... T:..." format)
+                parts = data.split()
+                for part in parts:
+                    if part.startswith('D:'):
+                        linear_distance = float(part[2:])  # extracts value after D:
+                    elif part.startswith('A:'):
+                        angular_rotation = float(part[2:])  # extract value after A:
+                    # T: timestamp is purposely ignored cos it may affect how data is parsed
+
+                # validate parsed values
+                if linear_distance is not None and angular_rotation is not None:
+                    self.publish_odometry_from_distance_angle(
+                        linear_distance * self.linear_scale,
+                        angular_rotation * self.angular_scale
+                    )
+                else:
+                    # warning about missing components which are the values it skipped (NOT TO BE ALARMED)
+                    missing = []
+                    if linear_distance is None: missing.append("linear")
+                    if angular_rotation is None: missing.append("angular")
+                    self.get_logger().warn(
+                        f"Partial data: {data} | Missing: {', '.join(missing)}"
+                    )
+
+            except UnicodeDecodeError as e:
+                self.get_logger().error(f"Decode error: {e} | Raw bytes: {self.serial_port.readline()}")
+                self.serial_port.reset_input_buffer()
+            except ValueError as e:
+                self.get_logger().error(f"Value error: {e} | Bad data: {data}")
+            except Exception as e:
+                self.get_logger().error(f"Unexpected error: {e}")
+                self.serial_port.reset_input_buffer()
+
     def publish_odometry_from_distance_angle(self, linear_distance, angular_rotation):
-        current_time = self.get_clock().now()
-        dt = (current_time - self.last_time).nanoseconds / 1e9
-
-        if dt < 0.001:
-            self.get_logger().warn("Time delta too small, skipping odometry update")
+        # use ROS time for dt calculation
+        now = self.get_clock().now()
+        dt = (now - self.last_time).nanoseconds / 1e9  # dt in seconds
+        if dt <= 0.0:
+            self.get_logger().warn("Invalid dt, skipping update")
             return
+        self.last_time = now
 
-        # Calculate change in linear and angular since last update
-        delta_linear = linear_distance - self.prev_linear
-        delta_angular = angular_rotation - self.prev_angular
 
-        # Save current values for next iteration
-        self.prev_linear = linear_distance
-        self.prev_angular = angular_rotation
-        self.last_time = current_time
 
-        # Update robot position and orientation
-        delta_theta = delta_angular
-        avg_theta = self.theta + delta_theta / 2.0
+        # update position using current orientation, linear and angular scale added as scale factors but currently set to 1 as raw data received is good
+        delta_linear = (linear_distance - self.prev_linear) * self.linear_scale
+        delta_angular = (angular_rotation - self.prev_angular) * self.angular_scale
 
-        delta_x = delta_linear * math.cos(avg_theta)
-        delta_y = delta_linear * math.sin(avg_theta)
+        # delta_linear = linear_distance
+        # delta_angular = angular_rotation
+
+        delta_x = delta_linear * math.cos(self.theta)
+        delta_y = delta_linear * math.sin(self.theta)
 
         self.x += delta_x
         self.y += delta_y
-        self.theta += delta_theta
+        self.theta += delta_angular
 
-        # Normalize theta to prevent drift over time
+        # normalise theta to -pi and pi
         self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
 
-        # Apply drift correction if enabled
-        self.apply_drift_correction()
+        # save current values for next iteration
+        self.prev_linear = linear_distance
+        self.prev_angular = angular_rotation
 
-        # Calculate quaternion from yaw (theta)
-        qz = math.sin(self.theta * 0.5)
-        qw = math.cos(self.theta * 0.5)
-
-        # Create and publish odometry message
+        # create and publish odometry message using ROS time
         odom_msg = Odometry()
-        odom_msg.header.stamp = current_time.to_msg()
+        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        # odom_msg.header.stamp = now.to_msg()
         odom_msg.header.frame_id = self.odom_frame
         odom_msg.child_frame_id = self.base_frame
 
-        # Set the position
+        # position
         odom_msg.pose.pose.position.x = self.x
         odom_msg.pose.pose.position.y = self.y
         odom_msg.pose.pose.position.z = 0.0
+
+        # orientation
+        qz = math.sin(self.theta * 0.5)
+        qw = math.cos(self.theta * 0.5)
         odom_msg.pose.pose.orientation.x = 0.0
         odom_msg.pose.pose.orientation.y = 0.0
         odom_msg.pose.pose.orientation.z = qz
         odom_msg.pose.pose.orientation.w = qw
 
-        # Set the velocity
-        linear_velocity = delta_linear / dt if dt > 0 else 0
-        angular_velocity = delta_angular / dt if dt > 0 else 0
+        # velocity
+        odom_msg.twist.twist.linear.x = delta_linear / dt
+        odom_msg.twist.twist.angular.z = delta_angular / dt
 
-        odom_msg.twist.twist.linear.x = linear_velocity
-        odom_msg.twist.twist.linear.y = 0.0
-        odom_msg.twist.twist.angular.z = angular_velocity
-
-        # Set covariance - important for mapping
-        # Using diagonal matrix with low uncertainty for position, higher for orientation
-        pose_cov = [
+        # pose covariance 
+        odom_msg.pose.covariance = [
             0.05,
             0.0,
             0.0,
@@ -369,54 +361,14 @@ class SerialMotorController(Node):
             0.0,
             0.5,
         ]
-        twist_cov = [
-            0.1,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.1,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.1,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.3,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.3,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.3,
-        ]
-
-        odom_msg.pose.covariance = pose_cov
-        odom_msg.twist.covariance = twist_cov
-
-        # Publish the odometry message
         self.odom_publisher.publish(odom_msg)
+        self.get_logger().info(
+            f"Published Odometry: ({self.x:.2f}, {self.y:.2f}, {self.theta:.2f})"
+        )
 
-        # Also publish the transform
+        # publish transform
         t = TransformStamped()
-        t.header.stamp = current_time.to_msg()
+        t.header.stamp = now.to_msg()
         t.header.frame_id = self.odom_frame
         t.child_frame_id = self.base_frame
         t.transform.translation.x = self.x
@@ -429,7 +381,6 @@ class SerialMotorController(Node):
         self.tf_broadcaster.sendTransform(t)
 
     def destroy_node(self):
-        # Ensure motors are stopped and serial connection is closed before shutdown
         self.send_command("S")
         self.serial_port.close()
         super().destroy_node()
@@ -437,24 +388,17 @@ class SerialMotorController(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
     try:
         motor_controller = SerialMotorController()
         rclpy.spin(motor_controller)
     except KeyboardInterrupt:
-        if "motor_controller" in locals():
-            motor_controller.get_logger().info("Node stopped by user")
+        motor_controller.get_logger().info("Node stopped by user")
     except Exception as e:
-        if "motor_controller" in locals():
-            motor_controller.get_logger().error(f"Error: {e}")
-        else:
-            print(f"Error during initialization: {e}")
+        motor_controller.get_logger().error(f"Error: {e}")
     finally:
-        if "motor_controller" in locals():
-            motor_controller.destroy_node()
+        motor_controller.destroy_node()
         rclpy.shutdown()
 
 
 if __name__ == "__main__":
     main()
-
