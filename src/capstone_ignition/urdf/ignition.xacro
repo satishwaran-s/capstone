@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <gazebo>
+        <plugin filename="libignition-gazebo-diff-drive-system.so" 
+        name="ignition::gazebo::systems::DiffDrive">
+            <left_joint>left_wheel_joint</left_joint>
+            <right_joint>right_wheel_joint</right_joint>
+            <wheel_separation>0.35</wheel_separation>
+            <wheel_radius>0.035</wheel_radius>
+            <topic>/cmd_vel</topic>
+        </plugin>
+
+        <!-- ............................. ground truth .................................... -->
+        <plugin filename="ignition-gazebo-odometry-publisher-system"
+        name="ignition::gazebo::systems::OdometryPublisher">
+            <odom_publish_frequency>50</odom_publish_frequency>
+            <odom_topic>/odom</odom_topic>
+            <odom_frame>odom</odom_frame>
+            <robot_base_frame>base_link</robot_base_frame>
+            <tf_topic>/tf</tf_topic>
+        </plugin>
+
+        <!-- Joint state publisher -->
+        <plugin filename="libignition-gazebo-joint-state-publisher-system.so" 
+        name="ignition::gazebo::systems::JointStatePublisher">
+        <topic>/joint_states</topic>
+        </plugin>
+    </gazebo>
+
+        <!-- ........................... 2D LIDAR config ................................... -->
+    <gazebo reference="laser_frame">
+        <sensor name='hls_lfcd_lds' type='gpu_lidar'>
+            <topic>/scan</topic>
+            <update_rate>10</update_rate>
+            <ignition_frame_id>laser_frame</ignition_frame_id>
+            <lidar>
+                <scan>
+                    <horizontal>
+                        <samples>360</samples>
+                        <resolution>1</resolution>
+                        <min_angle>0</min_angle>
+                        <max_angle>6.28</max_angle>
+                    </horizontal>
+                </scan>
+                <range>
+                    <min>0.120000</min>
+                    <max>20</max>
+                    <resolution>0.015</resolution>
+                </range>
+                <noise>
+                    <type>gaussian</type>
+                    <mean>0.0</mean>
+                    <stddev>0.01</stddev>
+                </noise>
+            </lidar>
+            <always_on>1</always_on>
+            <visualize>true</visualize>
+        </sensor>
+    </gazebo>
+</robot>
