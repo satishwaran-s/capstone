@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="https://www.ros.org/wiki/xacro" name="spray_paint_robot">
+
+    <xacro:include filename="$(find capstone_description)/urdf/robot_core.xacro"/>
+
+    <xacro:include filename="$(find capstone_description)/urdf/lidar.xacro"/>
+
+    <gazebo>
+        <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+            <parameters>$(find capstone_ignition)/params/controller.yaml</parameters>
+        </plugin>
+    </gazebo>
+
+    <ros2_control name="spray_paint_robot" namespace="/">
+        <plugin filename="gazebo_ros2_control/GazeboSystem" name="gazebo_ros2_control/GazeboSystem">
+            <robot_sim_type>gazebo_ros2_control/DefaultRobotHWSim</robot_sim_type>
+        </plugin>
+        <joint name="left_wheel_joint">
+            <command_interface name="velocity"/>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+        </joint>
+        <joint name="right_wheel_joint">
+            <command_interface name="velocity"/>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+        </joint>
+    </ros2_control>
+
+</robot>
